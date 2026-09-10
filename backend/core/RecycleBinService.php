@@ -136,7 +136,106 @@ class RecycleBinService
             return [false, 'Could not restore: ' . $e->getMessage()];
         }
 
-        return [true, 'Restored.'];
+        // The rows are back; the figures computed from them are not. Done
+        // after the commit so a resync problem can never roll back a restore
+        // that already succeeded.
+        $stale = self::resync($table, $payload['row'], $payload['children'] ?? []);
+
+        return $stale
+            ? [true, 'Restored, but some totals could not be refreshed — open the record to recalculate.']
+            : [true, 'Restored.'];
+    }
+
+    /**
+     * Bring derived figures back in line with the rows just restored.
+     *
+     * The bin puts raw rows back exactly as they were, which is right for the
+     * record but leaves every denormalised figure computed from it stale.
+     * Restoring a collection returned the receipt without moving the loan's
+     * `outstanding_balance`, so the same ₹1,300 was counted in Cash In Hand and
+     * in Outstanding Money Lent at once — the delete had correctly pushed the
+     * balance up, and nothing pushed it back down.
+     *
+     * Deletes have always resynced, because they go through
+     * ResourceController::destroy() and its afterWrite hook. A restore never
+     * touches a controller, so it has to do the same work itself.
+     *
+     * @return bool true if any recalculation failed.
+     */
+    private static function resync(string $table, array $row, array $children): bool
+    {
+        // The parent and everything that came back with it, flattened, so a
+        // restored loan resyncs from its collections as well as from itself.
+        $all = [[$table, $row]];
+        foreach ($children as $childTable => $childRows) {
+            foreach ($childRows as $childRow) {
+                if (is_array($childRow)) $all[] = [(string)$childTable, $childRow];
+            }
+        }
+
+        $loanIds = $customerIds = $memberIds = $groupIds = [];
+        foreach ($all as [$t, $r]) {
+            switch ($t) {
+                case 'loans':
+                    $loanIds[]     = $r['id'] ?? null;
+                    $customerIds[] = $r['customer_id'] ?? null;
+                    break;
+                case 'collections':
+                case 'repayment_schedule':
+                    $loanIds[]     = $r['loan_id'] ?? null;
+                    $customerIds[] = $r['customer_id'] ?? null;
+                    break;
+                case 'customers':
+                    $customerIds[] = $r['id'] ?? null;
+                    break;
+                case 'chit_groups':
+                    $groupIds[]  = $r['id'] ?? null;
+                    break;
+                case 'chit_members':
+                    $memberIds[] = $r['id'] ?? null;
+                    $groupIds[]  = $r['group_id'] ?? null;
+                    break;
+                case 'chit_payments':
+                case 'chit_passbook':
+                case 'chit_schedules':
+                    $memberIds[] = $r['member_id'] ?? null;
+                    $groupIds[]  = $r['group_id'] ?? null;
+                    break;
+            }
+        }
+
+        $clean = fn(array $v) => array_values(array_unique(array_filter($v)));
+        $loanIds     = $clean($loanIds);
+        $customerIds = $clean($customerIds);
+        $memberIds   = $clean($memberIds);
+        $groupIds    = $clean($groupIds);
+
+        $failed = false;
+        $step = function (callable $fn) use (&$failed) {
+            try {
+                $fn();
+            } catch (\Throwable $e) {
+                $failed = true;
+                error_log('RecycleBinService::resync step failed: ' . $e->getMessage());
+            }
+        };
+
+        // Loans first: the repayment schedule and outstanding balance are what
+        // Outstanding Money Lent is summed from. syncMany also refreshes the
+        // loan_status of the customers behind those loans.
+        if ($loanIds) $step(fn() => LoanRecalc::syncMany($loanIds));
+
+        // A restored group's members are found by the group, so members
+        // restored with their group are covered either way.
+        foreach ($groupIds as $g) $step(fn() => ChitPassbookService::syncGroup((string)$g));
+        if ($memberIds) $step(fn() => ChitPassbookService::syncMembers($memberIds));
+        foreach ($groupIds as $g) $step(fn() => ChitPassbookService::recalcGroupTotals((string)$g));
+
+        // Restoring a customer with no loans still has to move them off the
+        // 'none' their directory row was left showing.
+        if ($customerIds) $step(fn() => Customer::recalcLoanStatus($customerIds));
+
+        return $failed;
     }
 
     // ── internals ────────────────────────────────────────────────────

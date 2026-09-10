@@ -382,6 +382,30 @@ abstract class AppLocalizations {
   /// **'Inactive'**
   String get customersFilterInactive;
 
+  /// No description provided for @customersStatTotal.
+  ///
+  /// In en, this message translates to:
+  /// **'Total Customers'**
+  String get customersStatTotal;
+
+  /// No description provided for @customersStatActive.
+  ///
+  /// In en, this message translates to:
+  /// **'Active Customers'**
+  String get customersStatActive;
+
+  /// No description provided for @customersStatOverdue.
+  ///
+  /// In en, this message translates to:
+  /// **'Overdue Customers'**
+  String get customersStatOverdue;
+
+  /// No description provided for @customersStatInactive.
+  ///
+  /// In en, this message translates to:
+  /// **'Inactive Customers'**
+  String get customersStatInactive;
+
   /// No description provided for @customersNoResults.
   ///
   /// In en, this message translates to:
@@ -3412,6 +3436,12 @@ abstract class AppLocalizations {
   /// **'Chit Pending'**
   String get accountBreakdownChitPending;
 
+  /// No description provided for @accountBreakdownChitPendingNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Future member contributions — not counted as money lent'**
+  String get accountBreakdownChitPendingNote;
+
   /// No description provided for @accountBreakdownFundPending.
   ///
   /// In en, this message translates to:
@@ -3445,7 +3475,7 @@ abstract class AppLocalizations {
   /// No description provided for @accountEmptyStateBody.
   ///
   /// In en, this message translates to:
-  /// **'Add your first cash or lending entry to start tracking your account book.'**
+  /// **'All collections from Loans, Weekly Funds, Chit Groups and Custom Ledger entries will appear here live in real-time.'**
   String get accountEmptyStateBody;
 
   /// No description provided for @accountColDate.
@@ -3459,6 +3489,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Title'**
   String get accountColTitle;
+
+  /// No description provided for @accountColTitleReference.
+  ///
+  /// In en, this message translates to:
+  /// **'Title & Reference'**
+  String get accountColTitleReference;
+
+  /// No description provided for @accountColModule.
+  ///
+  /// In en, this message translates to:
+  /// **'Module'**
+  String get accountColModule;
 
   /// No description provided for @accountColCategory.
   ///
@@ -3489,6 +3531,60 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Actions'**
   String get accountColActions;
+
+  /// No description provided for @accountColStatusActions.
+  ///
+  /// In en, this message translates to:
+  /// **'Status / Actions'**
+  String get accountColStatusActions;
+
+  /// No description provided for @accountFilterModuleLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Filter Module:'**
+  String get accountFilterModuleLabel;
+
+  /// No description provided for @accountModuleAll.
+  ///
+  /// In en, this message translates to:
+  /// **'All Modules'**
+  String get accountModuleAll;
+
+  /// No description provided for @accountModuleLoans.
+  ///
+  /// In en, this message translates to:
+  /// **'Loans (கடன்)'**
+  String get accountModuleLoans;
+
+  /// No description provided for @accountModuleFunds.
+  ///
+  /// In en, this message translates to:
+  /// **'Funds (சேமிப்பு நிதி)'**
+  String get accountModuleFunds;
+
+  /// No description provided for @accountModuleChit.
+  ///
+  /// In en, this message translates to:
+  /// **'Chit Groups (சீட்டு)'**
+  String get accountModuleChit;
+
+  /// No description provided for @accountModuleCustom.
+  ///
+  /// In en, this message translates to:
+  /// **'Custom / Expenses'**
+  String get accountModuleCustom;
+
+  /// No description provided for @accountLiveSyncedBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Live Synced'**
+  String get accountLiveSyncedBadge;
+
+  /// No description provided for @accountShowingCount.
+  ///
+  /// In en, this message translates to:
+  /// **'Showing {start}-{end} of {total} real-time transactions'**
+  String accountShowingCount(int start, int end, int total);
 
   /// No description provided for @accountMissingTitleTitle.
   ///
@@ -4777,6 +4873,24 @@ abstract class AppLocalizations {
   /// **'1 Unit'**
   String get fundSettleOneUnitButton;
 
+  /// No description provided for @fundSettleTwoUnitButton.
+  ///
+  /// In en, this message translates to:
+  /// **'2 Units'**
+  String get fundSettleTwoUnitButton;
+
+  /// No description provided for @fundSettleFiveUnitButton.
+  ///
+  /// In en, this message translates to:
+  /// **'5 Units'**
+  String get fundSettleFiveUnitButton;
+
+  /// No description provided for @fundSettleUnitsInputMaxHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Max {maxUnits}'**
+  String fundSettleUnitsInputMaxHint(String maxUnits);
+
   /// No description provided for @fundSettleClosedPayoutLabel.
   ///
   /// In en, this message translates to:
@@ -4834,7 +4948,7 @@ abstract class AppLocalizations {
   /// No description provided for @fundSettleSummaryClosingTarget.
   ///
   /// In en, this message translates to:
-  /// **'Closing units deposit target'**
+  /// **'Closing Deposit Target'**
   String get fundSettleSummaryClosingTarget;
 
   /// No description provided for @fundSettleSummaryClosingTargetValue.

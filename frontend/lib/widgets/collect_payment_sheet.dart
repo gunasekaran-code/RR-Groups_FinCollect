@@ -10,8 +10,10 @@ const Color kCollectGold = Color(0xFFA9791F);
 ///
 /// [subtitleLabel]/[subtitleValue] describe what's being collected — a
 /// single loan number, or "3 loans" when collecting a lump sum against a
-/// whole customer group. [prefillAmount] is filled into the amount field
-/// but stays fully editable.
+/// whole customer group. The amount field starts pre-filled with one EMI
+/// ([installmentAmount], falling back to [dueAmount] then [prefillAmount])
+/// but stays fully editable; [prefillAmount] is otherwise used as the "Pay
+/// Dues" quick-amount fallback when [dueAmount] isn't supplied.
 class CollectPaymentSheet extends StatefulWidget {
   final String customerName;
   final String subtitleLabel;
@@ -77,7 +79,7 @@ class _CollectPaymentSheetState extends State<CollectPaymentSheet> {
   void initState() {
     super.initState();
     _amountController = TextEditingController(
-      text: widget.prefillAmount.round().toString(),
+      text: _emi.round().toString(),
     );
   }
 

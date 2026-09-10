@@ -2,8 +2,8 @@
 // Overdue accounts — a computed view over loans + repayment_schedule.
 //   GET  → reconcile loan statuses, then return the live overdue list.
 //   POST → force a reconcile only (admin/agent).
-// Reads are open to any authenticated user; the frontend scopes what each role
-// sees. Writes here only touch loans.status via the model's recompute().
+// An agent sees the overdues on the loans assigned to them; an admin sees all.
+// Writes here only touch loans.status via the model's recompute().
 
 class OverdueController extends Controller
 {
@@ -22,7 +22,9 @@ class OverdueController extends Controller
                     } catch (Throwable $e) {
                         error_log('Overdue::recompute warning: ' . $e->getMessage());
                     }
-                    $data = Overdue::accounts();
+                    // An agent is shown the overdues on their own loans only.
+                    $scopeTo = strtolower(trim((string)$role)) === 'agent' ? ($claims['sub'] ?? null) : null;
+                    $data = Overdue::accounts($scopeTo);
                     json_out($data);
                     break;
                 case 'POST':

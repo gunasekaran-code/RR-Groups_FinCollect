@@ -155,7 +155,7 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
 
                   // Category Dropdown
                   DropdownButtonFormField<String>(
-                    value: _selectedCategory,
+                    initialValue: _selectedCategory,
                     decoration: InputDecoration(
                       labelText: 'Category',
                       labelStyle: const TextStyle(color: AppColors.kTextMuted),

@@ -95,7 +95,7 @@ class FundApiService {
     final row = _normalizeRow(data);
     return Fund.fromJson(row);
   }
-  
+
   static Future<Fund> update(String id, Fund fund) async {
     final res = await postWithMethodOverride(
       _uri('funds', {'id': id}),
@@ -128,6 +128,7 @@ class FundApiService {
     String? fundCode,
     String? customerId,
     String? customerName,
+    String? notes,
   }) async {
     final res = await postWithMethodOverride(
       _uri('funds', {'id': id}),
@@ -144,7 +145,8 @@ class FundApiService {
 
     if (paymentAmount != null && paymentAmount > 0) {
       try {
-        final dateStr = (paymentDate ?? DateTime.now()).toIso8601String().substring(0, 10);
+        final dateStr =
+            (paymentDate ?? DateTime.now()).toIso8601String().substring(0, 10);
         await http.post(
           _uri('fund_payments'),
           headers: _headers,
@@ -158,6 +160,7 @@ class FundApiService {
             'payment_method': (paymentMethod ?? 'Cash').toLowerCase(),
             'payment_date': dateStr,
             'agent_name': SessionService.instance.currentUser?.name ?? 'Admin',
+            if (notes != null && notes.isNotEmpty) 'notes': notes,
           }),
         );
       } catch (_) {}
@@ -183,7 +186,7 @@ class FundApiService {
       headers: _headers,
       body: jsonEncode({
         'collected_amount': totalDeposit,
-        'status': FundStatus.matured.label,
+        'status': FundStatus.settled.label,
       }),
     );
     if (res.statusCode != 200) _throwFromResponse(res);

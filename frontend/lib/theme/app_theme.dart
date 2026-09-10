@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 /// FinCollect design tokens — RR Groups palette.
@@ -91,6 +93,35 @@ class AppTheme {
   // Hex codes / figures use a tabular-nums monospace stack.
   static const String monoFontFamily = 'RobotoMono';
   static const List<String> monoFontFamilyFallback = ['SFMono-Regular', 'monospace'];
+
+  // Apple's own system font (San Francisco). These leading-dot names aren't
+  // bundled font files — they're resolved straight off the device by
+  // iOS/macOS's CoreText, the same way a native app gets San Francisco for
+  // free. They mean nothing on other platforms, so only apply them behind
+  // [isApplePlatform]; elsewhere the font-matcher would just fall through
+  // to whatever's next, but there's no reason to ask it to.
+  static const String appleTextFontFamily = '.SF Pro Text';
+  static const String appleDisplayFontFamily = '.SF Pro Display';
+
+  static bool get isApplePlatform =>
+      !kIsWeb && (Platform.isIOS || Platform.isMacOS);
+
+  /// Wraps [child] with Apple's system font on iOS/macOS, unchanged
+  /// elsewhere. Use this around a screen (e.g. `Scaffold(...)`) that should
+  /// read like a native iPhone screen — every `Text`/`TextFormField` inside
+  /// that doesn't set its own `fontFamily` picks it up automatically.
+  static Widget withAppleFont(BuildContext context, Widget child) {
+    if (!isApplePlatform) return child;
+    final theme = Theme.of(context);
+    return Theme(
+      data: theme.copyWith(
+        textTheme: theme.textTheme.apply(fontFamily: appleTextFontFamily),
+        primaryTextTheme:
+            theme.primaryTextTheme.apply(fontFamily: appleTextFontFamily),
+      ),
+      child: child,
+    );
+  }
 
   static ThemeData get light {
     return ThemeData(

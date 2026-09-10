@@ -448,16 +448,42 @@ function ensure_chit_payments_table(): void
  * this can run on every deployment without duplicating money. Receipts whose
  * group or member cannot be resolved are left behind rather than guessed at —
  * they stay visible in the Account Book either way.
+ *
+ * Only money *coming in* is a contribution. The category alone does not say
+ * that: a chit prize payout is filed under "Chit Payout", names the same group
+ * and the same member, and matches "%chit%" just as well — so this used to
+ * recover a ₹39,600 prize as a ₹39,600 contribution and settle twenty-five
+ * draws the member had never paid. Three conditions keep that out:
+ *
+ *   - the entry must be `cash_in`; a payout is `cash_out`,
+ *   - it must not be the ledger row an auction wrote for its payout,
+ *   - it must not be in the recycle bin, or a deleted receipt would come back
+ *     as a live contribution.
  */
 function backfill_chit_payments_from_ledger(): void
 {
     $pdo = Database::pdo();
 
+    // chit_auctions is created later in this file, so on a database that has
+    // never seen it the clause is simply left out — cash_in already excludes
+    // every payout on its own.
+    $hasAuctions = (int)$pdo->query(
+        "SELECT COUNT(*) FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'chit_auctions'"
+    )->fetchColumn();
+    $notAPayout = $hasAuctions
+        ? "AND NOT EXISTS (SELECT 1 FROM chit_auctions a WHERE a.ledger_id = l.id)"
+        : '';
+
     $rows = $pdo->query(
         "SELECT l.id, l.title, l.notes, l.amount, l.entry_date, l.agent_id, l.agent_name, l.payment_method
          FROM account_ledger l
          LEFT JOIN chit_payments p ON p.ledger_id = l.id
-         WHERE LOWER(l.category) LIKE '%chit%' AND p.id IS NULL"
+         WHERE LOWER(l.category) LIKE '%chit%'
+           AND l.entry_type = 'cash_in'
+           AND COALESCE(l.delflag, 0) = 0
+           AND p.id IS NULL
+           $notAPayout"
     )->fetchAll(PDO::FETCH_ASSOC);
 
     if (!$rows) return;
@@ -527,6 +553,16 @@ function backfill_chit_payments_from_ledger(): void
             'Recovered from account book receipt during chit_payments migration.',
         ]);
         $touched[$member['id']] = true;
+    }
+
+    // Whoever gained a row needs their passbook and their group total
+    // rebuilt. That cannot happen here — chit_passbook is created further down
+    // this file — so the ids are handed to repair_and_resync_chit_payments(),
+    // which runs once the table is guaranteed to exist. Without it the
+    // recovered money sat in chit_payments while every derived figure still
+    // showed the old total.
+    foreach (array_keys($touched) as $mid) {
+        $GLOBALS['rrg_chit_resync_members'][$mid] = true;
     }
 
     // Rebuild the running balance for every member the backfill touched.
@@ -627,6 +663,131 @@ function ensure_chit_passbook_table(): void
 }
 
 /**
+ * Who won each draw, and whether the prize has actually been handed over.
+ *
+ * The draw sheet already carries a pool value per instalment — what the winner
+ * of that draw receives — but nothing recorded *who* took it or whether the
+ * money left the safe. Chit payouts were therefore invisible to the account
+ * book: contributions came in and raised Cash In Hand, and the far larger sum
+ * going back out to the winner never came off it.
+ *
+ * One row per (group, draw). The unique key is what stops a group paying the
+ * same draw twice.
+ */
+function ensure_chit_auctions_table(): void
+{
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    try {
+        $pdo = Database::pdo();
+        $hasTable = (int)$pdo->query(
+            "SELECT COUNT(*) FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'chit_auctions'"
+        )->fetchColumn();
+
+        if ($hasTable) return;
+
+        $pdo->exec("
+            CREATE TABLE chit_auctions (
+              id             CHAR(36)      NOT NULL PRIMARY KEY,
+              group_id       CHAR(36)      NOT NULL,
+              installment_no INT           NOT NULL,   -- the draw it settles
+              schedule_id    CHAR(36)      NULL,
+              group_number   VARCHAR(64)   NULL,
+              group_name     VARCHAR(191)  NULL,
+              auction_date   DATE          NULL,
+              -- The winner. NULL until the draw is held.
+              member_id      CHAR(36)      NULL,
+              customer_id    CHAR(36)      NULL,
+              member_name    VARCHAR(191)  NULL,
+              -- pool - discount - commission = what the winner is handed.
+              pool_amount    DECIMAL(14,2) NOT NULL DEFAULT 0,
+              bid_amount     DECIMAL(14,2) NOT NULL DEFAULT 0,
+              commission     DECIMAL(14,2) NOT NULL DEFAULT 0,
+              payout_amount  DECIMAL(14,2) NOT NULL DEFAULT 0,
+              -- The discount less commission, shared among the members.
+              dividend_total DECIMAL(14,2) NOT NULL DEFAULT 0,
+              status         ENUM('won','settled') NOT NULL DEFAULT 'won',
+              payout_date    DATE          NULL,
+              payment_method ENUM('cash','upi','card','bank','cheque') NOT NULL DEFAULT 'cash',
+              -- The account_ledger cash_out row this payout wrote, so the
+              -- money can be traced both ways and counted exactly once.
+              ledger_id      CHAR(36)      NULL,
+              agent_id       CHAR(36)      NULL,
+              agent_name     VARCHAR(191)  NULL,
+              notes          TEXT          NULL,
+              created_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              delflag        TINYINT(1)    NOT NULL DEFAULT 0,
+              deleted_at     DATETIME      NULL,
+              deleted_by     CHAR(36)      NULL,
+              -- A draw has one winner. Without this, a double submit pays the
+              -- prize twice and the cash book never balances again.
+              UNIQUE KEY uniq_auction_draw (group_id, installment_no),
+              INDEX idx_auction_member (member_id),
+              INDEX idx_auction_status (status),
+              INDEX idx_auction_delflag (delflag),
+              CONSTRAINT fk_auction_group FOREIGN KEY (group_id)
+                REFERENCES chit_groups(id) ON DELETE CASCADE,
+              -- SET NULL, not CASCADE: removing a member must not erase the
+              -- record that a prize was paid out of the group's money.
+              CONSTRAINT fk_auction_member FOREIGN KEY (member_id)
+                REFERENCES chit_members(id) ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+    } catch (\Throwable $e) {
+        // Schema check failures must never take the API down.
+    }
+}
+
+ensure_chit_auctions_table();
+
+/**
+ * Which agent a chit group belongs to.
+ *
+ * Loans, funds and customers all carry an `assigned_agent`; chit groups were
+ * the one module that did not, so the Chit Groups screen showed every group in
+ * the business to every agent. There was nothing to filter on.
+ */
+function ensure_chit_group_agent_columns(): void
+{
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    try {
+        $pdo = Database::pdo();
+        $stmt = $pdo->query("SHOW COLUMNS FROM chit_groups LIKE 'assigned_agent'");
+        if ($stmt && $stmt->rowCount() > 0) return;
+
+        $pdo->exec(
+            "ALTER TABLE chit_groups
+               ADD COLUMN assigned_agent CHAR(36)     NULL AFTER status,
+               ADD COLUMN agent_name     VARCHAR(191) NULL AFTER assigned_agent,
+               ADD INDEX idx_chit_groups_agent (assigned_agent)"
+        );
+
+        // SET NULL, like every other agent link: removing a member of staff
+        // must not delete the groups they were looking after.
+        try {
+            $pdo->exec(
+                "ALTER TABLE chit_groups
+                 ADD CONSTRAINT fk_chit_groups_agent FOREIGN KEY (assigned_agent)
+                   REFERENCES profiles(id) ON DELETE SET NULL"
+            );
+        } catch (\Throwable $e) {
+            // A pre-existing row pointing at a missing profile, or the key is
+            // already there. The column and index are what the scoping needs.
+        }
+    } catch (\Throwable $e) {
+        // Schema check failures must never take the API down.
+    }
+}
+
+ensure_chit_group_agent_columns();
+
+/**
  * Build the passbook for every existing member once.
  *
  * After this the rows are maintained by ChitPassbookService on every write
@@ -722,6 +883,323 @@ function dedupe_chit_schedules(): void
 dedupe_chit_schedules();
 
 ensure_chit_passbook_table();
+
+/**
+ * Undo contributions the ledger backfill should never have recovered, and
+ * rebuild whatever it did legitimately recover.
+ *
+ * The backfill used to match any ledger row filed under a chit category,
+ * whichever way the money was going. A prize payout is filed under
+ * "Chit Payout", names the same group and the same winner, and reads as a
+ * perfect match — so a ₹39,600 prize became a ₹39,600 contribution, and the
+ * waterfall settled the member's next twenty-five draws with money they had
+ * never paid. The query no longer matches those, but rows written before the
+ * fix are still in the table, so they are taken back out here.
+ *
+ * Only rows the backfill itself created are touched — they carry its note, and
+ * nothing else writes that string. A recovered row is removed when the receipt
+ * behind it is not a live `cash_in`: the wrong direction, in the recycle bin,
+ * an auction's own payout row, or gone from the ledger entirely (reversing a
+ * settled auction deletes it, which is what left the orphan here). These are
+ * deleted outright rather than soft-deleted: a fabricated row belongs in
+ * nobody's recycle bin.
+ *
+ * Everything downstream — the member's passbook, the group's collected and
+ * pending totals, the member's own status — is then rebuilt from what is
+ * actually in chit_payments.
+ */
+function repair_and_resync_chit_payments(): void
+{
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    $pdo = Database::pdo();
+    $marker = 'Recovered from account book receipt during chit_payments migration.';
+
+    try {
+        $hasAuctions = (int)$pdo->query(
+            "SELECT COUNT(*) FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'chit_auctions'"
+        )->fetchColumn();
+        $isAPayout = $hasAuctions
+            ? "OR EXISTS (SELECT 1 FROM chit_auctions a WHERE a.ledger_id = p.ledger_id)"
+            : '';
+
+        $stmt = $pdo->prepare(
+            "SELECT p.id, p.member_id, p.group_id
+               FROM chit_payments p
+               LEFT JOIN account_ledger l ON l.id = p.ledger_id
+              WHERE p.notes = ?
+                AND p.ledger_id IS NOT NULL
+                AND (l.id IS NULL
+                     OR l.entry_type <> 'cash_in'
+                     OR COALESCE(l.delflag, 0) <> 0
+                     $isAPayout)"
+        );
+        $stmt->execute([$marker]);
+        $bogus = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if ($bogus) {
+            $del = $pdo->prepare('DELETE FROM chit_payments WHERE id = ?');
+            foreach ($bogus as $row) {
+                $del->execute([$row['id']]);
+                if (!empty($row['member_id'])) {
+                    $GLOBALS['rrg_chit_resync_members'][$row['member_id']] = true;
+                }
+                if (!empty($row['group_id'])) {
+                    $GLOBALS['rrg_chit_resync_groups'][$row['group_id']] = true;
+                }
+            }
+        }
+
+        $memberIds = array_keys($GLOBALS['rrg_chit_resync_members'] ?? []);
+        if (!$memberIds) return;
+
+        // A member's running balance_after has to follow the deletion too, or
+        // the receipt list keeps showing the total that included the prize.
+        $sel = $pdo->prepare(
+            "SELECT id, amount FROM chit_payments
+              WHERE member_id = ? AND COALESCE(delflag, 0) = 0
+              ORDER BY payment_date IS NULL, payment_date ASC, created_at ASC, id ASC"
+        );
+        $upd = $pdo->prepare('UPDATE chit_payments SET balance_after = ? WHERE id = ?');
+        $grp = $pdo->prepare('SELECT group_id FROM chit_members WHERE id = ? LIMIT 1');
+
+        foreach ($memberIds as $memberId) {
+            $sel->execute([$memberId]);
+            $running = 0.0;
+            foreach ($sel->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                $running = round($running + (float)$row['amount'], 2);
+                $upd->execute([$running, $row['id']]);
+            }
+            ChitPassbookService::syncMember((string)$memberId);
+            $grp->execute([$memberId]);
+            $gid = $grp->fetchColumn();
+            if ($gid) $GLOBALS['rrg_chit_resync_groups'][$gid] = true;
+        }
+
+        foreach (array_keys($GLOBALS['rrg_chit_resync_groups'] ?? []) as $groupId) {
+            ChitPassbookService::recalcGroupTotals((string)$groupId);
+        }
+
+        $GLOBALS['rrg_chit_resync_members'] = [];
+        $GLOBALS['rrg_chit_resync_groups']  = [];
+    } catch (\Throwable $e) {
+        // A repair that cannot run must not take the API down; it retries on
+        // the next request.
+    }
+}
+
+repair_and_resync_chit_payments();
+
+/**
+ * Turn an `assigned_agent` holding an agent's *name* into their id.
+ *
+ * Early rows — and the fallback query the agent screens still carry — matched
+ * an agent by name, so `assigned_agent` sometimes holds "Ravi" rather than a
+ * uuid. That was survivable while the browser did the filtering and could try
+ * both. AgentScope compares against the signed-in agent's id and nothing else,
+ * which is the point of it, so a name left in that column would make the record
+ * invisible to the very agent it belongs to.
+ *
+ * A row is only converted when exactly one live agent carries that name. Two
+ * agents called "Kumar" are left for a human: handing someone else's loan to
+ * the wrong Kumar is worse than leaving it for an admin to re-assign.
+ */
+function normalise_agent_assignments(): void
+{
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    $marker = sys_get_temp_dir() . '/rrgroups_agent_ids_' . md5(__DIR__) . '.ok';
+    if (is_file($marker)) return;
+
+    try {
+        $pdo = Database::pdo();
+
+        // Anything that is not shaped like a uuid is a candidate.
+        $notUuid = "`assigned_agent` IS NOT NULL AND `assigned_agent` <> ''
+                    AND `assigned_agent` NOT REGEXP '^[0-9a-f]{8}-[0-9a-f]{4}-'";
+
+        $agents = $pdo->query(
+            "SELECT `id`, `full_name` FROM `profiles`
+              WHERE `role` = 'agent' AND `full_name` IS NOT NULL AND `full_name` <> ''"
+        )->fetchAll(PDO::FETCH_ASSOC);
+
+        // Names shared by two agents resolve to nobody.
+        $byName = [];
+        foreach ($agents as $a) {
+            $key = strtolower(trim((string)$a['full_name']));
+            $byName[$key] = array_key_exists($key, $byName) ? null : $a['id'];
+        }
+
+        $present = $pdo->query(
+            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()"
+        )->fetchAll(PDO::FETCH_COLUMN, 0);
+
+        foreach (['loans', 'funds', 'chit_groups', 'customers'] as $table) {
+            if (!in_array($table, $present, true)) continue;
+
+            $rows = $pdo->query("SELECT `id`, `assigned_agent` FROM `$table` WHERE $notUuid")
+                        ->fetchAll(PDO::FETCH_ASSOC);
+            if (!$rows) continue;
+
+            $upd = $pdo->prepare("UPDATE `$table` SET `assigned_agent` = ? WHERE `id` = ?");
+            foreach ($rows as $r) {
+                $key = strtolower(trim((string)$r['assigned_agent']));
+                $id  = $byName[$key] ?? null;
+                if ($id) $upd->execute([$id, $r['id']]);
+            }
+        }
+
+        @file_put_contents($marker, date('c'));
+    } catch (\Throwable $e) {
+        // Retry on the next request rather than taking the API down.
+        error_log('normalise_agent_assignments: ' . $e->getMessage());
+    }
+}
+
+normalise_agent_assignments();
+
+
+/**
+ * Reattach records whose customer went missing.
+ *
+ * `loans.customer_id`, `funds.customer_id` and the rest carry
+ * `ON DELETE SET NULL`, so hard-deleting a customer — which the seed and reset
+ * scripts still do, and which was the norm before soft delete arrived — silently
+ * cut every loan, receipt, fund and chit membership loose from them. The rows
+ * kept the customer's *name*, so nothing looked wrong on a screen that reads
+ * loans (the agent's Collections list), while any screen that starts from
+ * customers lost the money entirely: a ₹5,000 loan with ₹2,400 overdue on it
+ * belonged to nobody.
+ *
+ * There are two shapes of breakage. Columns with a foreign key were set to
+ * NULL; columns without one — collections, fund_payments, chit_payments — kept
+ * the id of a customer who no longer exists, which is worse, because it looks
+ * linked. Both are treated the same here: a customer id that matches no row at
+ * all is a broken link. A *soft*-deleted customer is not — those rows point at
+ * someone who is deliberately in the recycle bin, and moving them would undo a
+ * decision somebody made.
+ *
+ * A row is only reattached when its stored customer_name matches exactly one
+ * live customer. Two people called "Kumar" are left alone for a human to
+ * resolve — a wrong guess here moves real money onto the wrong person's book.
+ */
+function relink_orphan_records(): void
+{
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    $marker = sys_get_temp_dir() . '/rrgroups_relink_' . md5(__DIR__) . '.ok';
+    if (is_file($marker)) return;
+
+    try {
+        $pdo = Database::pdo();
+        $fixed = [];
+
+        // Parent records first, so the children below can follow their parent
+        // rather than relying on a name of their own.
+        foreach (['loans', 'funds', 'chit_members'] as $table) {
+            $n = relink_by_name($pdo, $table, $table === 'chit_members' ? 'member_name' : 'customer_name');
+            if ($n) $fixed[] = "$table: $n";
+        }
+
+        // A receipt belongs to whoever the loan belongs to. That is a fact, not
+        // a guess, so it is tried before any name matching.
+        $n = (int)$pdo->exec(
+            "UPDATE collections c
+               JOIN loans l ON l.id = c.loan_id AND l.customer_id IS NOT NULL
+                SET c.customer_id = l.customer_id,
+                    c.customer_name = COALESCE(c.customer_name, l.customer_name)
+              WHERE " . orphan_condition('c')
+        );
+        if ($n) $fixed[] = "collections via loan: $n";
+
+        $n = (int)$pdo->exec(
+            "UPDATE fund_payments p
+               JOIN funds f ON f.id = p.fund_id AND f.customer_id IS NOT NULL
+                SET p.customer_id = f.customer_id
+              WHERE " . orphan_condition('p')
+        );
+        if ($n) $fixed[] = "fund_payments via fund: $n";
+
+        $n = (int)$pdo->exec(
+            "UPDATE chit_payments p
+               JOIN chit_members m ON m.id = p.member_id AND m.customer_id IS NOT NULL
+                SET p.customer_id = m.customer_id
+              WHERE " . orphan_condition('p')
+        );
+        if ($n) $fixed[] = "chit_payments via member: $n";
+
+        // Anything still loose gets the name test as a last resort.
+        $n = relink_by_name($pdo, 'collections', 'customer_name');
+        if ($n) $fixed[] = "collections by name: $n";
+
+        if ($fixed) {
+            error_log('relink_orphan_records: ' . implode(', ', $fixed));
+            // Balances and the customer directory are derived from these links.
+            $loans = $pdo->query("SELECT id FROM loans WHERE delflag = 0")->fetchAll(PDO::FETCH_COLUMN, 0);
+            LoanRecalc::syncMany($loans ?: []);
+            ChitPassbookService::syncAll();
+        }
+
+        @file_put_contents($marker, date('c'));
+    } catch (\Throwable $e) {
+        // Retry on the next request rather than taking the API down.
+    }
+}
+
+/**
+ * SQL for "this row's customer link is broken": either empty, or pointing at a
+ * customer row that no longer physically exists.
+ *
+ * Deliberately not `delflag = 0`: a soft-deleted customer is still a customer,
+ * sitting in the recycle bin, and their loans and receipts belong to them until
+ * somebody restores or purges them.
+ */
+function orphan_condition(string $alias): string
+{
+    return "(`$alias`.customer_id IS NULL OR NOT EXISTS (
+              SELECT 1 FROM customers oc WHERE oc.id = `$alias`.customer_id))";
+}
+
+/**
+ * Point rows with a broken customer link back at the one live customer whose
+ * name they carry. Returns how many were reattached.
+ */
+function relink_by_name(PDO $pdo, string $table, string $nameColumn): int
+{
+    $rows = $pdo->query(
+        "SELECT id, `$nameColumn` AS nm FROM `$table` t
+          WHERE " . orphan_condition('t') . "
+            AND `$nameColumn` IS NOT NULL AND `$nameColumn` <> ''"
+    )->fetchAll(PDO::FETCH_ASSOC);
+    if (!$rows) return 0;
+
+    $find = $pdo->prepare(
+        "SELECT id FROM customers WHERE delflag = 0 AND full_name = ? LIMIT 2"
+    );
+    $set = $pdo->prepare("UPDATE `$table` SET customer_id = ? WHERE id = ?");
+
+    $done = 0;
+    foreach ($rows as $r) {
+        $find->execute([$r['nm']]);
+        $matches = $find->fetchAll(PDO::FETCH_COLUMN, 0);
+        // Exactly one, or it stays loose: guessing between two people with the
+        // same name would move real money onto the wrong book.
+        if (count($matches) !== 1) continue;
+        $set->execute([$matches[0], $r['id']]);
+        $done++;
+    }
+    return $done;
+}
+
+relink_orphan_records();
+
 
 /**
  * Soft-delete archive backing the admin Recycle Bin.
@@ -979,6 +1457,59 @@ function dedupe_repayment_schedule(): void
 }
 
 dedupe_repayment_schedule();
+
+/**
+ * Repair loans left stale by a restore from the recycle bin.
+ *
+ * Until RecycleBinService::restore() learned to resync, putting a collection
+ * back returned the receipt without moving the loan's `outstanding_balance`.
+ * The delete had correctly raised the balance; nothing lowered it again. The
+ * money then showed in Cash In Hand and in Outstanding Money Lent at the same
+ * time, and the loan card claimed a debt that had been paid.
+ *
+ * Only loans whose stored balance actually disagrees with their live
+ * collections are touched, so this reports what it repaired instead of quietly
+ * rewriting every loan in the database.
+ */
+function resync_restored_loans(): void
+{
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    $marker = sys_get_temp_dir() . '/rrgroups_restore_resync_' . md5(__DIR__) . '.ok';
+    if (is_file($marker)) return;
+
+    try {
+        $pdo = Database::pdo();
+
+        // total_repayment minus what has actually been received is what the
+        // balance should be; anything more than a rupee out is stale.
+        $stale = $pdo->query(
+            "SELECT l.id
+               FROM loans l
+              WHERE l.delflag = 0
+                AND ABS(
+                      l.outstanding_balance
+                      - GREATEST(l.total_repayment - COALESCE((
+                          SELECT SUM(c.collection_amount) FROM collections c
+                           WHERE c.loan_id = l.id AND c.delflag = 0
+                        ), 0), 0)
+                    ) > 1"
+        )->fetchAll(PDO::FETCH_COLUMN, 0) ?: [];
+
+        if ($stale) {
+            LoanRecalc::syncMany($stale);
+            error_log('resync_restored_loans: recalculated ' . count($stale) . ' loan(s) left stale by a restore');
+        }
+
+        @file_put_contents($marker, date('c'));
+    } catch (\Throwable $e) {
+        // Retry on the next request rather than taking the API down.
+    }
+}
+
+resync_restored_loans();
 
 /** True when $table carries the soft-delete flag (cached per request). */
 function table_has_delflag(string $table): bool
@@ -1264,5 +1795,157 @@ function ensure_utf8mb4_charset(): void
         @file_put_contents($marker, date('c'));
     }
 }
+
+/**
+ * Give the money tables the cascading foreign keys everything else already has.
+ *
+ * Three separate mechanisms decide what a delete takes with it — the recycle
+ * bin's archive, `soft_delete_cascade()`, and the restore that reads the
+ * archived payload — and all three ask the database the same question: which
+ * tables point here with ON DELETE CASCADE. That is one map, derived rather
+ * than written down, which is why chit groups have always taken their members,
+ * schedules and contributions with them.
+ *
+ * `fund_payments` and `collections` were never given the key. They are the two
+ * tables that hold received money, so the consequences were the worst kind of
+ * quiet:
+ *
+ *   - Deleting a fund left its deposits live. Cash In Hand sums
+ *     `fund_payments WHERE delflag = 0` without consulting the fund, so the
+ *     money stayed on the books for ever while the fund sat in the bin.
+ *   - The rows were never archived either, so restoring the fund brought back
+ *     an empty shell — the passbook was gone even though the deposits were
+ *     still in the table, now pointing at a fund that had been deleted.
+ *   - Deleting a loan did the same to its receipts.
+ *
+ * Adding the key fixes all three at once, because all three read it.
+ *
+ * Rows whose parent has already vanished would make the key impossible. They
+ * are reported and the key is skipped rather than deleted: an orphaned receipt
+ * is somebody's money, and a migration is not the place to decide it never
+ * happened.
+ */
+function ensure_cascade_foreign_keys(): void
+{
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    $marker = sys_get_temp_dir() . '/rrgroups_cascade_fk_' . md5(__DIR__) . '.ok';
+    if (is_file($marker)) return;
+
+    $wanted = [
+        // child table      => [column, parent table, constraint name]
+        ['fund_payments', 'fund_id', 'funds', 'fk_fund_payments_fund'],
+        ['collections',   'loan_id', 'loans', 'fk_collections_loan'],
+    ];
+
+    try {
+        $pdo = Database::pdo();
+        $allDone = true;
+
+        foreach ($wanted as [$child, $col, $parent, $name]) {
+            // Already cascading? Nothing to do. A key that exists with the
+            // wrong rule is left alone — dropping somebody's constraint is not
+            // this function's business.
+            $existing = $pdo->prepare(
+                "SELECT rc.DELETE_RULE
+                   FROM information_schema.REFERENTIAL_CONSTRAINTS rc
+                   JOIN information_schema.KEY_COLUMN_USAGE k
+                     ON k.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+                    AND k.CONSTRAINT_SCHEMA = rc.CONSTRAINT_SCHEMA
+                  WHERE rc.CONSTRAINT_SCHEMA = DATABASE()
+                    AND rc.TABLE_NAME = ? AND k.COLUMN_NAME = ?
+                    AND rc.REFERENCED_TABLE_NAME = ?"
+            );
+            $existing->execute([$child, $col, $parent]);
+            if ($existing->fetchColumn() !== false) continue;
+
+            // Both tables have to be there, which they will not be on a
+            // database still being built.
+            $have = $pdo->prepare(
+                "SELECT COUNT(*) FROM information_schema.TABLES
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (?, ?)"
+            );
+            $have->execute([$child, $parent]);
+            if ((int)$have->fetchColumn() !== 2) { $allDone = false; continue; }
+
+            $orphans = $pdo->query(
+                "SELECT COUNT(*) FROM `$child` c
+                   LEFT JOIN `$parent` p ON p.`id` = c.`$col`
+                  WHERE c.`$col` IS NOT NULL AND p.`id` IS NULL"
+            )->fetchColumn();
+
+            if ((int)$orphans > 0) {
+                error_log(
+                    "ensure_cascade_foreign_keys: $child has $orphans row(s) whose $parent no longer exists; "
+                    . "the cascade key was not created. Reattach or remove them by hand — deleting money here "
+                    . "is a decision for a person."
+                );
+                $allDone = false;
+                continue;
+            }
+
+            try {
+                $pdo->exec(
+                    "ALTER TABLE `$child`
+                       ADD CONSTRAINT `$name` FOREIGN KEY (`$col`)
+                       REFERENCES `$parent` (`id`) ON DELETE CASCADE"
+                );
+            } catch (\Throwable $e) {
+                error_log("ensure_cascade_foreign_keys: could not add $name: " . $e->getMessage());
+                $allDone = false;
+            }
+        }
+
+        // Only stop checking once every key is in place, so a database that
+        // needed a hand gets another look on the next deploy.
+        if ($allDone) @file_put_contents($marker, date('c'));
+    } catch (\Throwable $e) {
+        error_log('ensure_cascade_foreign_keys: ' . $e->getMessage());
+    }
+}
+
+ensure_cascade_foreign_keys();
+
+/**
+ * Flag children the parent left behind before the cascade key existed.
+ *
+ * A fund deleted last week still has live deposits, and Cash In Hand is still
+ * counting them. The key stops it happening again but does not go back over
+ * what already happened, so the rows are brought into line with the parent
+ * that is already in the recycle bin — restoring the parent unflags them
+ * again, exactly as it would for a delete made today.
+ */
+function backfill_orphaned_soft_deletes(): void
+{
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    $marker = sys_get_temp_dir() . '/rrgroups_orphan_delflag_' . md5(__DIR__) . '.ok';
+    if (is_file($marker)) return;
+
+    try {
+        $pdo = Database::pdo();
+        foreach ([['fund_payments', 'fund_id', 'funds'], ['collections', 'loan_id', 'loans']] as [$child, $col, $parent]) {
+            if (!table_has_delflag($child) || !table_has_delflag($parent)) continue;
+
+            $pdo->prepare(
+                "UPDATE `$child` c
+                   JOIN `$parent` p ON p.`id` = c.`$col`
+                    SET c.`delflag`    = 1,
+                        c.`deleted_at` = COALESCE(c.`deleted_at`, p.`deleted_at`, NOW()),
+                        c.`deleted_by` = COALESCE(c.`deleted_by`, p.`deleted_by`)
+                 WHERE p.`delflag` = 1 AND c.`delflag` = 0"
+            )->execute();
+        }
+        @file_put_contents($marker, date('c'));
+    } catch (\Throwable $e) {
+        error_log('backfill_orphaned_soft_deletes: ' . $e->getMessage());
+    }
+}
+
+backfill_orphaned_soft_deletes();
 
 ensure_utf8mb4_charset();

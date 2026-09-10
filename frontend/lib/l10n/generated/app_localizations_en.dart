@@ -154,6 +154,18 @@ class AppLocalizationsEn extends AppLocalizations {
   String get customersFilterInactive => 'Inactive';
 
   @override
+  String get customersStatTotal => 'Total Customers';
+
+  @override
+  String get customersStatActive => 'Active Customers';
+
+  @override
+  String get customersStatOverdue => 'Overdue Customers';
+
+  @override
+  String get customersStatInactive => 'Inactive Customers';
+
+  @override
   String get customersNoResults => 'No customers found';
 
   @override
@@ -1830,6 +1842,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get accountBreakdownChitPending => 'Chit Pending';
 
   @override
+  String get accountBreakdownChitPendingNote =>
+      'Future member contributions — not counted as money lent';
+
+  @override
   String get accountBreakdownFundPending => 'Fund Pending';
 
   @override
@@ -1846,13 +1862,19 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get accountEmptyStateBody =>
-      'Add your first cash or lending entry to start tracking your account book.';
+      'All collections from Loans, Weekly Funds, Chit Groups and Custom Ledger entries will appear here live in real-time.';
 
   @override
   String get accountColDate => 'Date';
 
   @override
   String get accountColTitle => 'Title';
+
+  @override
+  String get accountColTitleReference => 'Title & Reference';
+
+  @override
+  String get accountColModule => 'Module';
 
   @override
   String get accountColCategory => 'Category';
@@ -1868,6 +1890,35 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get accountColActions => 'Actions';
+
+  @override
+  String get accountColStatusActions => 'Status / Actions';
+
+  @override
+  String get accountFilterModuleLabel => 'Filter Module:';
+
+  @override
+  String get accountModuleAll => 'All Modules';
+
+  @override
+  String get accountModuleLoans => 'Loans (கடன்)';
+
+  @override
+  String get accountModuleFunds => 'Funds (சேமிப்பு நிதி)';
+
+  @override
+  String get accountModuleChit => 'Chit Groups (சீட்டு)';
+
+  @override
+  String get accountModuleCustom => 'Custom / Expenses';
+
+  @override
+  String get accountLiveSyncedBadge => 'Live Synced';
+
+  @override
+  String accountShowingCount(int start, int end, int total) {
+    return 'Showing $start-$end of $total real-time transactions';
+  }
 
   @override
   String get accountMissingTitleTitle => 'Title Required';
@@ -2570,6 +2621,17 @@ class AppLocalizationsEn extends AppLocalizations {
   String get fundSettleOneUnitButton => '1 Unit';
 
   @override
+  String get fundSettleTwoUnitButton => '2 Units';
+
+  @override
+  String get fundSettleFiveUnitButton => '5 Units';
+
+  @override
+  String fundSettleUnitsInputMaxHint(String maxUnits) {
+    return 'Max $maxUnits';
+  }
+
+  @override
   String get fundSettleClosedPayoutLabel => 'Closed Units Payout';
 
   @override
@@ -2601,7 +2663,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get fundSettleSettlementDateLabel => 'SETTLEMENT DATE';
 
   @override
-  String get fundSettleSummaryClosingTarget => 'Closing units deposit target';
+  String get fundSettleSummaryClosingTarget => 'Closing Deposit Target';
 
   @override
   String fundSettleSummaryClosingTargetValue(

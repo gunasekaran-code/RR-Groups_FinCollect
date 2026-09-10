@@ -1487,7 +1487,7 @@ class _AddCollectionDialogState extends State<AddCollectionDialog> {
               selectedLoan == null
                   ? l10n.collectionsSelectLoanPrompt
                   : l10n.collectionsLoansLinkedCount(availableLoans.length),
-              style: TextStyle(fontSize: 12, color: AppColors.kTextMuted)),
+              style: const TextStyle(fontSize: 12, color: AppColors.kTextMuted)),
           if (selectedLoan != null) ...[
             const SizedBox(height: 12),
             _buildLoanSummary(selectedLoan, l10n),

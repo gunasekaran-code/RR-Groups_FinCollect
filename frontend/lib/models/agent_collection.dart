@@ -160,14 +160,25 @@ class AgentCollectionItem {
 
   static String formatAmount(double value) {
     final intValue = value.round();
-    final s = intValue.toString();
-    final buf = StringBuffer();
-    for (int i = 0; i < s.length; i++) {
-      final posFromEnd = s.length - i;
-      buf.write(s[i]);
-      if (posFromEnd > 3 && (posFromEnd - 3) % 2 == 0) buf.write(',');
+    final isNegative = intValue < 0;
+    final digits = intValue.abs().toString();
+
+    String grouped;
+    if (digits.length <= 3) {
+      grouped = digits;
+    } else {
+      final lastThree = digits.substring(digits.length - 3);
+      var remaining = digits.substring(0, digits.length - 3);
+      final groups = <String>[];
+      while (remaining.length > 2) {
+        groups.insert(0, remaining.substring(remaining.length - 2));
+        remaining = remaining.substring(0, remaining.length - 2);
+      }
+      if (remaining.isNotEmpty) groups.insert(0, remaining);
+      grouped = '${groups.join(',')},$lastThree';
     }
-    return '₹$buf';
+
+    return '${isNegative ? '-' : ''}₹$grouped';
   }
 }
 

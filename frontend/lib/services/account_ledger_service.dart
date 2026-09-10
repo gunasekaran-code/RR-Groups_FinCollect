@@ -65,6 +65,30 @@ class AccountLedgerService {
         .toList();
   }
 
+  /// Fetch the unified, real-time transaction stream — Loan collections,
+  /// Fund deposits, Chit contributions and Custom Ledger entries, already
+  /// combined and tagged with a `module` by the backend
+  /// (account_book.php?action=stream -> AccountLedger::getUnifiedTransactions).
+  Future<List<AccountLedgerEntry>> fetchTransactions() async {
+    final uri = Uri.parse(_endpoint).replace(queryParameters: {
+      'action': 'stream',
+    });
+    final res = await _client.get(uri, headers: _headers);
+
+    if (res.statusCode != 200) {
+      throw AccountLedgerException(
+        _errorMessage(res, 'Failed to load account book transactions'),
+      );
+    }
+
+    final decoded = jsonDecode(res.body);
+    final list = _extractList(decoded);
+
+    return list
+        .map((e) => AccountLedgerEntry.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   /// Fetch the server-calculated, real-time Account Book totals.
   Future<AccountLedgerSummary> fetchSummary() async {
     final uri = Uri.parse(_endpoint).replace(queryParameters: {

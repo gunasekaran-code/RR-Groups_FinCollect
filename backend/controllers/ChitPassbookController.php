@@ -28,6 +28,8 @@ class ChitPassbookController extends ResourceController
             if ($role === 'customer') {
                 $this->scopeToOwnCustomer($claims);
             }
+            // An agent reads the passbooks of the groups assigned to them.
+            ChitScope::applyRead($this->model::table(), $role, $claims['sub'] ?? null);
             $this->refreshRequested();
         }
 

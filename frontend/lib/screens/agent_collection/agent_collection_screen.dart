@@ -25,7 +25,14 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
   List<AgentCustomerGroup> _groups = [];
   String _query = '';
 
-  int _collectedToday = 0;
+  // Keyed by "customerId|loanId" so it survives the list reload after a
+  // collection is recorded (the API returns fresh group objects each time).
+  final Map<String, double> _collectedTodayByGroup = {};
+
+  int get _collectedToday => _collectedTodayByGroup.length;
+
+  String _groupKey(AgentCustomerGroup group) =>
+      '${group.customerId}|${group.loanId}';
 
   @override
   void initState() {
@@ -91,7 +98,7 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
         subtitleLabel: 'Loan Type',
         subtitleValue: group.displayLoanType,
         prefillAmount: group.totalDueWithPenalty,
-        installmentAmount: group.items.length == 1
+        installmentAmount: group.items.isNotEmpty
           ? group.items.first.installmentAmount
           : null,
         dueAmount: group.totalDue,
@@ -120,7 +127,11 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
           date.month == now.month &&
           date.day == now.day;
       setState(() {
-        if (isToday) _collectedToday++;
+        if (isToday) {
+          final key = _groupKey(group);
+          _collectedTodayByGroup[key] =
+              (_collectedTodayByGroup[key] ?? 0) + amount;
+        }
       });
       final summary = createdCount == 1
           ? '1 installment recorded'
@@ -188,6 +199,7 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
         final group = filtered[index - 1];
         return _CustomerGroupCard(
           group: group,
+          collectedTodayAmount: _collectedTodayByGroup[_groupKey(group)],
           onTap: () => _openDetail(group),
           onCollect: () => _showCollectSheet(group),
           onVisit: () => openCustomerLocation(context, group),
@@ -306,18 +318,25 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
 
 class _CustomerGroupCard extends StatelessWidget {
   final AgentCustomerGroup group;
+  final double? collectedTodayAmount;
   final VoidCallback onTap;
   final VoidCallback onCollect;
   final VoidCallback onVisit;
 
   const _CustomerGroupCard({
     required this.group,
+    this.collectedTodayAmount,
     required this.onTap,
     required this.onCollect,
     required this.onVisit,
   });
 
+  bool get _isPaidToday => collectedTodayAmount != null;
+
+  String get _statusLabel => _isPaidToday ? 'Paid' : group.statusLabel;
+
   Color get _statusColor {
+    if (_isPaidToday) return AppColors.kSuccess;
     switch (group.status) {
       case AgentCollectionStatus.overdue:
         return AppColors.kDanger;
@@ -329,6 +348,7 @@ class _CustomerGroupCard extends StatelessWidget {
   }
 
   Color get _statusBg {
+    if (_isPaidToday) return const Color(0xFFE7F7EE);
     switch (group.status) {
       case AgentCollectionStatus.overdue:
         return const Color(0xFFFDEBEC);
@@ -341,215 +361,184 @@ class _CustomerGroupCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppColors.kSurface,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.kBorder),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.kSurface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: _kGoldTint,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    group.initials,
-                    style: const TextStyle(
-                        color: _kGold, fontWeight: FontWeight.bold),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(group.customerName,
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w700,
-                              fontSize: 16,
-                              color: AppColors.kTextDark)),
-                      const SizedBox(height: 2),
-                      Text(group.uniqueName,
-                          style: const TextStyle(
-                              fontSize: 13, color: AppColors.kTextMuted)),
-                      Text('Loan ID: ${group.loanId}',
-                          style: const TextStyle(
-                              fontSize: 12, color: AppColors.kTextMuted)),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: _statusBg,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    group.statusLabel,
-                    style: TextStyle(
-                      color: _statusColor,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 12,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: _kGoldTint,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        group.initials,
+                        style: const TextStyle(
+                            color: _kGold, fontWeight: FontWeight.bold),
+                      ),
                     ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  child: _InfoBox(
-                      label: 'Total Outstanding',
-                      value: AgentCollectionItem.formatAmount(
-                          group.totalOutstanding)),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _InfoBox(
-                      label: 'Due Now',
-                      value: AgentCollectionItem.formatAmount(group.totalDueWithPenalty)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Due Amount: ${AgentCollectionItem.formatAmount(group.totalDue)}',
-                    style: const TextStyle(
-                        color: AppColors.kDanger,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600),
-                  ),
-                ),
-                if (group.totalPenalty > 0)
-                  Expanded(
-                    child: Text(
-                      'Penalty: ${AgentCollectionItem.formatAmount(group.totalPenalty)}',
-                      style: const TextStyle(
-                          color: AppColors.kDanger,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(group.customerName,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 16,
+                                  color: AppColors.kTextDark)),
+                          const SizedBox(height: 2),
+                          Text(
+                              group.loanNumbers.isNotEmpty
+                                  ? group.loanNumbers.first
+                                  : group.loanId,
+                              style: const TextStyle(
+                                  fontSize: 13, color: AppColors.kTextMuted)),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: _statusBg,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        _statusLabel,
+                        style: TextStyle(
+                          color: _statusColor,
+                          fontWeight: FontWeight.w700,
                           fontSize: 12,
-                          fontWeight: FontWeight.w600),
+                        ),
+                      ),
                     ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                const Icon(Icons.event_outlined,
-                    size: 16, color: AppColors.kTextMuted),
-                const SizedBox(width: 6),
-                Text(
-                  'Due ${AgentCollectionItem.formatDate(group.nearestDueDate)}',
-                  style: const TextStyle(
-                      fontSize: 13, color: AppColors.kTextMuted),
+                  ],
                 ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                const Icon(Icons.phone_outlined,
-                    size: 16, color: AppColors.kTextMuted),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    group.contactPhone?.isNotEmpty == true
-                        ? group.contactPhone!
-                        : 'Contact on file',
-                    style: const TextStyle(
-                        fontSize: 13, color: AppColors.kTextMuted),
-                  ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _InfoBox(
+                          label: 'EMI',
+                          value: AgentCollectionItem.formatAmount(
+                              group.items.first.installmentAmount)),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _InfoBox(
+                          label: 'Due Amount',
+                          value: AgentCollectionItem.formatAmount(
+                              group.totalDueWithPenalty)),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _InfoBox(
+                          label: 'Next Due',
+                          value: AgentCollectionItem.formatDate(
+                              group.nearestDueDate)),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                const Icon(Icons.category_outlined,
-                    size: 16, color: AppColors.kTextMuted),
-                const SizedBox(width: 6),
-                Text(
-                  'Loan Type: ${group.displayLoanType} • ${group.displayLoanName}',
-                  style: const TextStyle(
-                      fontSize: 13, color: AppColors.kTextMuted),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Icon(Icons.phone_outlined,
+                        size: 16, color: AppColors.kTextMuted),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        group.contactPhone?.isNotEmpty == true
+                            ? group.contactPhone!
+                            : 'Contact on file',
+                        style: const TextStyle(
+                            fontSize: 13, color: AppColors.kTextMuted),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            if (group.address != null && group.address!.trim().isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Row(
-                children: [
-                  const Icon(Icons.location_on_outlined,
-                      size: 16, color: AppColors.kTextMuted),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      group.address!,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 13, color: AppColors.kTextMuted),
+                if (_isPaidToday) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE7F7EE),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.check, size: 16, color: AppColors.kSuccess),
+                        const SizedBox(width: 8),
+                        Text(
+                          '${AgentCollectionItem.formatAmount(collectedTodayAmount!)} collected today',
+                          style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.kSuccess),
+                        ),
+                      ],
                     ),
                   ),
                 ],
-              ),
-            ],
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  flex: 2,
-                  child: ElevatedButton.icon(
-                    onPressed: onCollect,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _kGold,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                    ),
-                    icon: const Icon(Icons.currency_rupee, size: 16),
-                    label: const Text('Collect'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: onVisit,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.kTextDark,
-                      side: const BorderSide(color: AppColors.kBorder),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                    ),
-                    icon: const Icon(Icons.location_on_outlined, size: 16),
-                    label: const Text('Visit'),
-                  ),
-                ),
               ],
             ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                flex: 2,
+                child: ElevatedButton.icon(
+                  onPressed: onCollect,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _kGold,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: const Icon(Icons.currency_rupee, size: 16),
+                  label: const Text('Collect'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: onVisit,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.kTextDark,
+                    side: const BorderSide(color: AppColors.kBorder),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: const Icon(Icons.location_on_outlined, size: 16),
+                  label: const Text('Visit'),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

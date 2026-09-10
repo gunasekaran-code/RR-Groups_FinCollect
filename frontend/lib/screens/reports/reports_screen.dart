@@ -127,7 +127,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       setState(() => _errorMessage = e.message);
     } catch (e) {
       if (!mounted) return;
-      final l10n = AppLocalizations.of(context)!;
+      final l10n = AppLocalizations.of(context);
       setState(() => _errorMessage = l10n.reportsGenericErrorMessage);
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -167,7 +167,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   Future<void> _exportExcel() async {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
     ToastService.show(
       title: l10n.reportsExportingExcelTitle,
       message: l10n.reportsExportingExcelMessage,
@@ -191,7 +191,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
     return AppShell(
       currentRoute: AppRoutes.reports,
       title: l10n.reportsScreenTitle,
@@ -211,15 +211,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
               builder: (context, constraints) {
                 final narrow = constraints.maxWidth < 380;
                 if (narrow) {
-                  return Column(
+                  return const Column(
                     children: [
-                      const SizedBox(height: 10),
+                      SizedBox(height: 10),
                     ],
                   );
                 }
-                return Row(
+                return const Row(
                   children: [
-                    const SizedBox(width: 12),
+                    SizedBox(width: 12),
                   ],
                 );
               },
@@ -302,7 +302,7 @@ class _ErrorState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
       decoration: BoxDecoration(
@@ -338,7 +338,7 @@ class _SegmentedTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
     return Container(
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
@@ -537,7 +537,7 @@ class _DailyReportSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
     final collections = report.collections;
     final newLoans = report.newLoans;
 
@@ -613,7 +613,7 @@ class _MonthlyReportSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
     final s = report.summary;
 
     return Column(
@@ -735,7 +735,7 @@ class _AgentPerformanceSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
     final agents = report.agents;
 
     return Column(
@@ -845,7 +845,7 @@ class _SimpleLineChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (points.isEmpty) {
-      final l10n = AppLocalizations.of(context)!;
+      final l10n = AppLocalizations.of(context);
       return Center(
           child: Text(l10n.reportsNoData,
               style: const TextStyle(color: AppColors.kTextMuted)));
@@ -945,7 +945,7 @@ class _SimpleBarChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (points.isEmpty) {
-      final l10n = AppLocalizations.of(context)!;
+      final l10n = AppLocalizations.of(context);
       return Center(
           child: Text(l10n.reportsNoData,
               style: const TextStyle(color: AppColors.kTextMuted)));

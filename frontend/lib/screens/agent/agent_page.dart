@@ -1,16 +1,17 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
-import '../../routes/app_routes.dart';
-import '../../theme/app_theme.dart';
-import '../../widgets/app_shell.dart';
-import '../../widgets/page_header.dart';
-import '../../widgets/status_badge.dart';
-import '../../theme/confirm_dialog.dart';
-import '../../theme/glass_toast.dart';
-import '../../services/photo_service.dart';
-import '../../services/agent_api_service.dart';
-import '../../services/auth_api_service.dart' show ApiException;
-import '../../l10n/generated/app_localizations.dart';
+import '../../../routes/app_routes.dart';
+import '../../../theme/app_theme.dart';
+import '../../../widgets/app_shell.dart';
+import '../../../widgets/page_header.dart';
+import '../../../widgets/status_badge.dart';
+import '../../../theme/confirm_dialog.dart';
+import '../../../theme/glass_toast.dart';
+import '../../../services/photo_service.dart';
+import '../../../services/agent_api_service.dart';
+import '../../../services/auth_api_service.dart' show ApiException;
+import '../../../l10n/generated/app_localizations.dart';
+import 'agent_collection_status_page.dart';
 
 String localizedRoleLabel(String role, AppLocalizations l10n) {
   switch (role) {
@@ -38,6 +39,91 @@ String localizedStatusLabel(String status, AppLocalizations l10n) {
   }
 }
 
+/// Reusable "stat" card — the same visual used for the Total/Active/
+/// Inactive/Added-this-month row is now shared with the collection status
+/// page so both look identical.
+class StatCard extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final Color iconBg;
+  final String value;
+  final String label;
+
+  const StatCard({
+    super.key,
+    required this.icon,
+    required this.iconColor,
+    required this.iconBg,
+    required this.value,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12.0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.02),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: iconBg,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  icon,
+                  color: iconColor,
+                  size: 30,
+                ),
+              ),
+            ],
+          ),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: Colors.grey.shade600,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class AgentManagementScreen extends StatefulWidget {
   const AgentManagementScreen({super.key});
 
@@ -46,8 +132,8 @@ class AgentManagementScreen extends StatefulWidget {
 }
 
 class _AgentManagementScreenState extends State<AgentManagementScreen> {
-  String _query = '';
-  String _selectedRole = 'Agent';
+  final String _query = '';
+  final String _selectedRole = 'Agent';
 
   String _formatCreatedDate(dynamic value) {
     if (value == null || value.toString().isEmpty) {
@@ -281,6 +367,19 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
     }
   }
 
+  /// Opens the "Collection Status" page for a single agent. The page
+  /// fetches live counts from the backend (see AgentCollectionStatusPage).
+  void _openCollectionStatusPage(Map<String, dynamic> agent) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => AgentCollectionStatusPage(
+          agentId: agent['id'] as String,
+          agentName: agent['name'] as String,
+        ),
+      ),
+    );
+  }
+
   BadgeTone _toneFor(String status) {
     switch (status) {
       case 'Active':
@@ -292,20 +391,41 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
     }
   }
 
-  List<Map<String, dynamic>> get _filteredAgents => _agents.where((a) {
+  /// Agents matching the current role filter (this screen is locked to the
+  /// "Agent" role — Admins/Managers returned by the API are excluded).
+  /// The stat cards below are computed from this, not from the raw
+  /// `_agents` list, so a mixed-role API response doesn't inflate the
+  /// counts shown here.
+  List<Map<String, dynamic>> get _roleFilteredAgents => _agents
+      .where((a) => _selectedRole == 'All' || a['role'] == _selectedRole)
+      .toList();
+
+  List<Map<String, dynamic>> get _filteredAgents =>
+      _roleFilteredAgents.where((a) {
         final matchesQuery =
             a['name']!.toLowerCase().contains(_query.toLowerCase()) ||
                 a['mobile']!.toLowerCase().contains(_query.toLowerCase());
-        final matchesRole =
-            _selectedRole == 'All' || a['role'] == _selectedRole;
-        return matchesQuery && matchesRole;
+        return matchesQuery;
       }).toList();
 
-  int get _totalAgents => _agents.length;
-  int get _activeAgents => _agents.where((a) => a['status'] == 'Active').length;
+  int get _totalAgents => _roleFilteredAgents.length;
+  int get _activeAgents =>
+      _roleFilteredAgents.where((a) => a['status'] == 'Active').length;
   int get _inactiveAgents =>
-      _agents.where((a) => a['status'] != 'Active').length;
-  int get _addedThisMonth => _agents.length;
+      _roleFilteredAgents.where((a) => a['status'] != 'Active').length;
+  int get _addedThisMonth {
+    final now = DateTime.now();
+    return _roleFilteredAgents.where((a) {
+      final raw = a['created'];
+      if (raw == null || raw.toString().isEmpty) return false;
+      try {
+        final date = DateTime.parse(raw.toString());
+        return date.year == now.year && date.month == now.month;
+      } catch (_) {
+        return false;
+      }
+    }).length;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -379,8 +499,6 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
                   ),
                   _buildStatsRow(isNarrow, l10n),
                   const SizedBox(height: 8),
-                  _buildSearchAndFilters(isNarrow, l10n),
-                  const SizedBox(height: 8),
                   _buildAgentsTable(isNarrow, l10n),
                   const SizedBox(height: 24),
                 ],
@@ -394,31 +512,31 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
 
   Widget _buildStatsRow(bool isNarrow, AppLocalizations l10n) {
     final cards = <Widget>[
-      _statCard(
+      StatCard(
         icon: Icons.shield_outlined,
         iconColor: AppColors.kSuccess,
         iconBg: const Color(0xFFF0FDF4),
         value: '$_totalAgents',
         label: l10n.agentStatTotal,
       ),
-      _statCard(
+      StatCard(
         icon: Icons.person_outline,
-        iconColor: AppColors.kSuccess,
-        iconBg: const Color(0xFFF0FDF4),
+        iconColor: AppColors.kInfo,
+        iconBg: const Color(0xFFF0F5FF),
         value: '$_activeAgents',
         label: l10n.agentStatActive,
       ),
-      _statCard(
+      StatCard(
         icon: Icons.person_off_outlined,
         iconColor: AppColors.kInfo,
         iconBg: const Color(0xFFF0F5FF),
         value: '$_inactiveAgents',
         label: l10n.agentStatInactive,
       ),
-      _statCard(
+      StatCard(
         icon: Icons.person_add_alt_outlined,
-        iconColor: AppColors.kInfo,
-        iconBg: const Color(0xFFF0F5FF),
+        iconColor: AppColors.kSuccess,
+        iconBg: const Color(0xFFF0FDF4),
         value: '$_addedThisMonth',
         label: l10n.agentStatAddedThisMonth,
       ),
@@ -440,129 +558,6 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
     );
   }
 
-  Widget _statCard({
-    required IconData icon,
-    required Color iconColor,
-    required Color iconBg,
-    required String value,
-    required String label,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(12.0),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.02),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: iconBg,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  icon,
-                  color: iconColor,
-                  size: 30,
-                ),
-              ),
-            ],
-          ),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              color: Colors.grey.shade600,
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSearchAndFilters(bool isNarrow, AppLocalizations l10n) {
-    final searchField = TextField(
-      decoration: InputDecoration(
-        prefixIcon: const Icon(Icons.search),
-        hintText: l10n.agentSearchHint,
-        isDense: true,
-      ),
-      onChanged: (v) => setState(() => _query = v),
-    );
-
-    final roleDropdown = DropdownButtonFormField<String>(
-      initialValue: _selectedRole,
-      decoration: const InputDecoration(isDense: true),
-      items: _roleFilters
-          .map((r) => DropdownMenuItem(
-              value: r, child: Text(localizedRoleLabel(r, l10n))))
-          .toList(),
-      onChanged: (v) {
-        if (v != null) setState(() => _selectedRole = v);
-      },
-    );
-
-    if (isNarrow) {
-      return Container(
-        margin: const EdgeInsets.symmetric(horizontal: 20),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppColors.kSurface,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.kBorder),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            searchField,
-            const SizedBox(height: 12),
-            roleDropdown,
-          ],
-        ),
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
-      child: Row(
-        children: [
-          Expanded(flex: 3, child: searchField),
-          const SizedBox(width: 16),
-          SizedBox(width: 160, child: roleDropdown),
-        ],
-      ),
-    );
-  }
 
   Widget _buildAgentsTable(bool isNarrow, AppLocalizations l10n) {
     final agents = _filteredAgents;
@@ -650,6 +645,13 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
           DataCell(Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              IconButton(
+                icon: const Icon(Icons.account_balance_wallet_outlined,
+                    size: 20),
+                color: AppColors.kInfo,
+                onPressed: () => _openCollectionStatusPage(agent),
+                tooltip: 'Collection status',
+              ),
               IconButton(
                 icon: const Icon(Icons.edit_outlined, size: 20),
                 color: AppColors.kTextMuted,

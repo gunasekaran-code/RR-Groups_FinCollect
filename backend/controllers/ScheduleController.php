@@ -24,6 +24,10 @@ class ScheduleController extends ResourceController
                 json_error('Only admins can delete schedule rows', 403);
             }
         } elseif ($method === 'GET') {
+            // An instalment has no agent column; it belongs to whoever holds
+            // the loan. Without this the schedule is the way around the rule
+            // on loans themselves.
+            AgentScope::apply($this->model::table(), $role, $claims['sub'] ?? null);
             $this->syncRequestedLoan();
         }
 

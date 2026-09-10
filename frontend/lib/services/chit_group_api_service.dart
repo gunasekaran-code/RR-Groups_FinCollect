@@ -7,6 +7,7 @@ import 'session_service.dart';
 import '../models/chit_group.dart';
 import '../models/chit_member.dart';
 import '../models/chit_passbook.dart';
+import '../models/chit_auction.dart';
 
 class ChitGroupApiService {
   static String get _restEndpoint => '${ApiConfig.normalizedBaseUrl}/rest.php';
@@ -399,7 +400,120 @@ class ChitGroupApiService {
     });
   }
 
+  // ---- AUCTIONS & SETTLEMENT: read the whole draw sheet for a group ----
+  //
+  // Reads backend/chit.php?action=auctions&group_id=..., which drives the
+  // sheet from the group's draw schedule — the same rules that build the
+  // Installment Schedule tab above — so every draw shows even before it has
+  // been auctioned, instead of an empty screen indistinguishable from a
+  // loading failure.
+  static Future<ChitAuctionData> fetchAuctions(String groupId) async {
+    final uri = Uri.parse(_chitEndpoint).replace(queryParameters: {
+      'action': 'auctions',
+      'group_id': groupId,
+    });
+    final res = await http.get(uri, headers: _headers);
+    _throwIfError(res);
+    return ChitAuctionData.fromJson(_mapFrom(res));
+  }
+
+  // ---- AUCTIONS: record (or correct) who won a draw ----
+  //
+  // Does not move any money — settleAuctionPayout does that. Safely
+  // repeatable while the discount/commission are still being entered, so
+  // this doubles as the "Edit" action on an unsettled draw.
+  static Future<ChitAuctionData> recordAuctionWinner({
+    required String groupId,
+    required int installmentNo,
+    required String memberId,
+    double bidAmount = 0,
+    double commission = 0,
+    DateTime? auctionDate,
+    String? notes,
+  }) async {
+    final uri = Uri.parse('$_chitEndpoint?action=record_auction');
+    final res = await http.post(
+      uri,
+      headers: _headers,
+      body: jsonEncode({
+        'group_id': groupId,
+        'installment_no': installmentNo,
+        'member_id': memberId,
+        'bid_amount': bidAmount,
+        'commission': commission,
+        if (auctionDate != null)
+          'auction_date': auctionDate.toIso8601String().split('T').first,
+        if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
+      }),
+    );
+    _throwIfError(res);
+    return ChitAuctionData.fromJson(_mapFrom(res));
+  }
+
+  // ---- AUCTIONS: pay the prize out (admin) ----
+  //
+  // Writes an account_ledger cash_out row and marks the auction settled in
+  // one server-side transaction — the same one-request-per-money-movement
+  // pattern collectContribution above uses for a member's contribution.
+  static Future<ChitAuctionData> settleAuctionPayout({
+    required String auctionId,
+    required String paymentMethod,
+    required DateTime payoutDate,
+    String? notes,
+  }) async {
+    final uri = Uri.parse('$_chitEndpoint?action=settle_auction');
+    final res = await http.post(
+      uri,
+      headers: _headers,
+      body: jsonEncode({
+        'auction_id': auctionId,
+        'payment_method': paymentMethod,
+        'payout_date': payoutDate.toIso8601String().split('T').first,
+        if (notes != null && notes.trim().isNotEmpty) 'notes': notes.trim(),
+      }),
+    );
+    _throwIfError(res);
+    return ChitAuctionData.fromJson(_mapFrom(res));
+  }
+
+  // ---- AUCTIONS: undo a payout recorded in error (admin) ----
+  static Future<ChitAuctionData> reverseAuctionPayout({
+    required String auctionId,
+  }) async {
+    final uri = Uri.parse('$_chitEndpoint?action=reverse_payout');
+    final res = await http.post(
+      uri,
+      headers: _headers,
+      body: jsonEncode({'auction_id': auctionId}),
+    );
+    _throwIfError(res);
+    return ChitAuctionData.fromJson(_mapFrom(res));
+  }
+
+  // ---- AUCTIONS: remove an unsettled auction record (admin) ----
+  static Future<ChitAuctionData> deleteAuction({
+    required String auctionId,
+  }) async {
+    final uri = Uri.parse('$_chitEndpoint?action=delete_auction');
+    final res = await http.post(
+      uri,
+      headers: _headers,
+      body: jsonEncode({'auction_id': auctionId}),
+    );
+    _throwIfError(res);
+    return ChitAuctionData.fromJson(_mapFrom(res));
+  }
+
   // ---- helpers ----
+  static Map<String, dynamic> _mapFrom(http.Response res) {
+    final decoded = jsonDecode(res.body);
+    if (decoded is Map<String, dynamic>) return decoded;
+    throw ChitGroupApiException(
+      'Unexpected response shape from server',
+      res.statusCode,
+    );
+  }
+
   static List<Map<String, dynamic>> _listFrom(http.Response res) {
     final decoded = jsonDecode(res.body);
     final List list = decoded is Map && decoded.containsKey('data')

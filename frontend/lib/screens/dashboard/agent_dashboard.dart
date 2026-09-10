@@ -92,11 +92,33 @@ class AgentReportService {
     );
 
     final loanRecords = loans.map(LoanRecord.fromJson).toList();
-    final routeStops = loanRecords
+    final today = DateTime.now();
+    final todayDateKey = DateFormat('yyyy-MM-dd').format(today);
+
+    final activeAssigned = loanRecords
+        .where((loan) => loan.outstandingBalance > 0)
+        .toList();
+
+    final todayCollectionRows = collections.where((row) {
+      final rawDate = row['collection_date'] ?? row['created_at'] ?? row['createdAt'];
+      if (rawDate == null) return false;
+      final dateText = rawDate.toString();
+      if (dateText.length >= 10) {
+        return dateText.substring(0, 10) == todayDateKey;
+      }
+      return false;
+    }).toList();
+
+    final paidTodayLoanIds = todayCollectionRows
+        .map((row) => (row['loan_id'] ?? row['loanId'])?.toString())
+        .where((id) => id != null && id.isNotEmpty)
+        .toSet();
+
+    final routeStops = activeAssigned
         .take(10)
         .map(
           (loan) => RouteStop(
-            order: loanRecords.indexOf(loan) + 1,
+            order: activeAssigned.indexOf(loan) + 1,
             loanId: loan.id,
             customerName: loan.customerName,
             loanNumber: loan.loanNumber,
@@ -108,24 +130,20 @@ class AgentReportService {
         )
         .toList();
 
-    final collectedToday = collections.fold<double>(
+    final collectedToday = todayCollectionRows.fold<double>(
       0,
       (sum, row) => sum + _asDouble(row['collection_amount'] ?? row['amount']),
     );
 
-    final pending = loanRecords
-        .where((loan) =>
-            loan.status.toLowerCase() == 'pending' ||
-            loan.status.toLowerCase() == 'active' ||
-            loan.status.toLowerCase() == 'overdue')
+    final pending = activeAssigned
+        .where((loan) => !paidTodayLoanIds.contains(loan.id))
         .length;
-    final completed = loanRecords
-        .where((loan) => loan.status.toLowerCase() == 'closed')
-        .length;
+    final completed = todayCollectionRows.length;
+    final todayCustomers = activeAssigned.length;
 
     return AgentDashboardData(
       summary: AgentSummary(
-        todayCustomers: loanRecords.length,
+        todayCustomers: todayCustomers,
         pending: pending,
         completed: completed,
         collectedToday: collectedToday,

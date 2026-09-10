@@ -87,7 +87,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildNetBalanceCard(AccountLedgerSummary s, AppLocalizations l10n) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final fmt = formatIndianCurrency;
+    const fmt = formatIndianCurrency;
     return ClipRRect(
       borderRadius: BorderRadius.circular(24),
       child: Container(
@@ -110,7 +110,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           children: [
             Row(
               children: [
-                Icon(Icons.savings_outlined,
+                const Icon(Icons.savings_outlined,
                     color: AppColors.kGoldLight, size: 20),
                 const SizedBox(width: 8),
                 Text(l10n.dashboardNetBalanceSummary,
@@ -170,7 +170,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     children: [
                       Row(
                         children: [
-                          Icon(Icons.emoji_events_outlined,
+                          const Icon(Icons.emoji_events_outlined,
                               color: AppColors.kGoldLight, size: 18),
                           const SizedBox(width: 6),
                           Text(l10n.dashboardNetBalanceLabel,
@@ -216,6 +216,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
     );
   }
+
+
+
 
   Widget _ledgerRow({
     required IconData icon,

@@ -13,16 +13,26 @@ import 'package:image_picker/image_picker.dart';
 
 String formatDate(DateTime d) {
   const months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
   final dd = d.day.toString().padLeft(2, '0');
   return '$dd ${months[d.month - 1]} ${d.year}';
 }
 
 class _Breakpoints {
-  static const double narrow = 360; 
-  static const double phone = 600; 
+  static const double narrow = 360;
+  static const double phone = 600;
 }
 
 bool _isNarrow(double width) => width < _Breakpoints.narrow;
@@ -115,14 +125,18 @@ Future<void> showActivePromoPopup(BuildContext context) async {
                           top: 10,
                           left: 10,
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
                               gradient: const LinearGradient(
                                 colors: [goldLight, goldMid],
                               ),
                               borderRadius: BorderRadius.circular(99),
                               boxShadow: const [
-                                BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2)),
+                                BoxShadow(
+                                    color: Colors.black26,
+                                    blurRadius: 4,
+                                    offset: Offset(0, 2)),
                               ],
                             ),
                             child: const Text(
@@ -153,7 +167,10 @@ Future<void> showActivePromoPopup(BuildContext context) async {
                     colors: [goldLight, goldMid],
                   ),
                   boxShadow: [
-                    BoxShadow(color: Colors.black.withOpacity(0.35), blurRadius: 8, offset: const Offset(0, 3)),
+                    BoxShadow(
+                        color: Colors.black.withOpacity(0.35),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3)),
                   ],
                 ),
                 padding: const EdgeInsets.all(2.5),
@@ -174,7 +191,6 @@ Future<void> showActivePromoPopup(BuildContext context) async {
     },
   );
 }
-
 
 bool _isRenderableImage(String imageUrl) =>
     imageUrl.startsWith('http') || imageUrl.startsWith('data:image');
@@ -216,7 +232,7 @@ class _PromoPopupScreenState extends State<PromoPopupScreen> {
       final popups = await PromoPopupApiService.fetchPopups();
       // Sort by creation date descending
       popups.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-      
+
       if (!mounted) return;
       setState(() {
         _popups = popups;
@@ -253,6 +269,16 @@ class _PromoPopupScreenState extends State<PromoPopupScreen> {
 
   Future<void> _togglePublishState(PromoPopup popup, bool makeActive) async {
     try {
+      if (makeActive) {
+        // Backend has no exclusivity rule on `is_active`, so enforce
+        // "only one live banner at a time" from the frontend: deactivate
+        // every other currently-active banner before activating this one.
+        final othersToDeactivate =
+            _popups.where((p) => p.id != popup.id && p.isActive);
+        for (final other in othersToDeactivate) {
+          await PromoPopupApiService.toggleActive(other.id, false);
+        }
+      }
       await PromoPopupApiService.toggleActive(popup.id, makeActive);
       await _loadData();
       ToastService.show(
@@ -273,7 +299,8 @@ class _PromoPopupScreenState extends State<PromoPopupScreen> {
     final confirmed = await AppConfirmDialog.show(
       context: context,
       title: 'Delete Poster Banner?',
-      message: 'Are you sure you want to delete "${popup.title}" from history? It will be moved to the Recycle Bin and can be restored later.',
+      message:
+          'Are you sure you want to delete "${popup.title}" from history? It will be moved to the Recycle Bin and can be restored later.',
       confirmLabel: 'Delete Poster',
       confirmButtonColor: AppColors.kDanger,
     );
@@ -327,7 +354,8 @@ class _PromoPopupScreenState extends State<PromoPopupScreen> {
   @override
   Widget build(BuildContext context) {
     return AppShell(
-      currentRoute: AppRoutes.promotionalPopup, // Define this in app_routes.dart
+      currentRoute:
+          AppRoutes.promotionalPopup, // Define this in app_routes.dart
       title: _isAdmin ? 'Promotional Popup Management' : 'Latest Offers',
       body: LayoutBuilder(
         builder: (context, constraints) {
@@ -345,9 +373,13 @@ class _PromoPopupScreenState extends State<PromoPopupScreen> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(_loadError!, style: const TextStyle(color: AppColors.kDanger)),
+                            Text(_loadError!,
+                                style:
+                                    const TextStyle(color: AppColors.kDanger)),
                             const SizedBox(height: 12),
-                            ElevatedButton(onPressed: _loadData, child: const Text('Retry')),
+                            ElevatedButton(
+                                onPressed: _loadData,
+                                child: const Text('Retry')),
                           ],
                         ),
                       )
@@ -358,7 +390,8 @@ class _PromoPopupScreenState extends State<PromoPopupScreen> {
                             _isAdmin
                                 ? 'Manage website promotional banners, upload new posters, and track banner history in real time.'
                                 : 'View the latest promotional offers from RR Groups.',
-                            style: TextStyle(color: AppColors.kTextMuted, fontSize: 14),
+                            style: const TextStyle(
+                                color: AppColors.kTextMuted, fontSize: 14),
                           ),
                           if (_isAdmin) ...[
                             const SizedBox(height: 16),
@@ -373,7 +406,8 @@ class _PromoPopupScreenState extends State<PromoPopupScreen> {
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: const Color(0xFFB48629),
                                     foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(vertical: 16),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 16),
                                   ),
                                 ),
                               ),
@@ -383,67 +417,81 @@ class _PromoPopupScreenState extends State<PromoPopupScreen> {
                           _ActiveBannerHero(
                             activeBanner: _activeBanner,
                             isAdmin: _isAdmin,
-                            onUpload: _isAdmin ? () => _openManageDialog() : null,
-                            onDisable: _isAdmin ? () => _togglePublishState(_activeBanner!, false) : null,
+                            onUpload:
+                                _isAdmin ? () => _openManageDialog() : null,
+                            onDisable: _isAdmin
+                                ? () =>
+                                    _togglePublishState(_activeBanner!, false)
+                                : null,
                             narrow: narrow,
                           ),
                           const SizedBox(height: 24),
-                          if (_isAdmin) Container(
-                            padding: EdgeInsets.all(narrow ? 14 : 20),
-                            decoration: BoxDecoration(
-                              color: AppColors.kSurface,
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: AppColors.kBorder),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    const Icon(Icons.calendar_today_outlined, size: 20, color: AppColors.kTextDark),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      'Promotional Banner History (${_popups.length})',
-                                      style: const TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w700,
-                                        color: AppColors.kTextDark,
+                          if (_isAdmin)
+                            Container(
+                              padding: EdgeInsets.all(narrow ? 14 : 20),
+                              decoration: BoxDecoration(
+                                color: AppColors.kSurface,
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: AppColors.kBorder),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.calendar_today_outlined,
+                                          size: 20, color: AppColors.kTextDark),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'Promotional Banner History (${_popups.length})',
+                                        style: const TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w700,
+                                          color: AppColors.kTextDark,
+                                        ),
                                       ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 6),
-                                const Text(
-                                  "All past uploaded posters and promotional campaign banners. Click 'Publish Live' to switch active poster.",
-                                  style: TextStyle(color: AppColors.kTextMuted, fontSize: 13),
-                                ),
-                                const SizedBox(height: 16),
-                                const Divider(color: AppColors.kBorder),
-                                const SizedBox(height: 16),
-                                if (_popups.isEmpty)
-                                  const Padding(
-                                    padding: EdgeInsets.symmetric(vertical: 30),
-                                    child: Center(
-                                      child: Text(
-                                        'No banner history available.',
-                                        style: TextStyle(color: AppColors.kTextMuted),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  const Text(
+                                    "All past uploaded posters and promotional campaign banners. Click 'Publish Live' to switch active poster.",
+                                    style: TextStyle(
+                                        color: AppColors.kTextMuted,
+                                        fontSize: 13),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  const Divider(color: AppColors.kBorder),
+                                  const SizedBox(height: 16),
+                                  if (_popups.isEmpty)
+                                    const Padding(
+                                      padding:
+                                          EdgeInsets.symmetric(vertical: 30),
+                                      child: Center(
+                                        child: Text(
+                                          'No banner history available.',
+                                          style: TextStyle(
+                                              color: AppColors.kTextMuted),
+                                        ),
                                       ),
-                                    ),
-                                  )
-                                else
-                                  ..._popups.map((p) => Padding(
-                                    padding: const EdgeInsets.only(bottom: 16),
-                                    child: _HistoryCard(
-                                      popup: p,
-                                      narrow: narrow,
-                                      onEdit: () => _openManageDialog(existing: p),
-                                      onDelete: () => _deleteBanner(p),
-                                      onToggleActive: () => _togglePublishState(p, !p.isActive),
-                                    ),
-                                  )),
-                              ],
+                                    )
+                                  else
+                                    ..._popups.map((p) => Padding(
+                                          padding:
+                                              const EdgeInsets.only(bottom: 16),
+                                          child: _HistoryCard(
+                                            popup: p,
+                                            narrow: narrow,
+                                            onEdit: () =>
+                                                _openManageDialog(existing: p),
+                                            onDelete: () => _deleteBanner(p),
+                                            onToggleActive: () =>
+                                                _togglePublishState(
+                                                    p, !p.isActive),
+                                          ),
+                                        )),
+                                ],
+                              ),
                             ),
-                          ),
                         ],
                       ),
           );
@@ -503,7 +551,8 @@ class _ActiveBannerHero extends StatelessWidget {
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(99),
@@ -516,7 +565,11 @@ class _ActiveBannerHero extends StatelessWidget {
                     SizedBox(width: 6),
                     Text(
                       'LIVE ACTIVE BANNER',
-                      style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.5),
+                      style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.5),
                     ),
                   ],
                 ),
@@ -524,14 +577,18 @@ class _ActiveBannerHero extends StatelessWidget {
               if (hasActive) ...[
                 const SizedBox(width: 12),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
                     color: const Color(0xFF16A34A),
                     borderRadius: BorderRadius.circular(99),
                   ),
                   child: const Text(
                     'Active Live',
-                    style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600),
                   ),
                 )
               ]
@@ -550,12 +607,13 @@ class _ActiveBannerHero extends StatelessWidget {
           Text(
             hasActive
                 ? isAdmin
-                  ? 'This banner poster is currently popping up live on the website for visitors.'
-                  : 'This promotional offer is currently live for you.'
+                    ? 'This banner poster is currently popping up live on the website for visitors.'
+                    : 'This promotional offer is currently live for you.'
                 : isAdmin
-                  ? 'Turn ON an existing banner from history or upload a new poster banner to enable live website popup.'
-                  : 'There is no active promotional offer right now.',
-            style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.4),
+                    ? 'Turn ON an existing banner from history or upload a new poster banner to enable live website popup.'
+                    : 'There is no active promotional offer right now.',
+            style: const TextStyle(
+                color: Colors.white70, fontSize: 14, height: 1.4),
           ),
           const SizedBox(height: 24),
           if (hasActive && isAdmin)
@@ -563,7 +621,8 @@ class _ActiveBannerHero extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 GestureDetector(
-                  onTap: () => _showImagePreview(context, activeBanner!.imageUrl),
+                  onTap: () =>
+                      _showImagePreview(context, activeBanner!.imageUrl),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(12),
                     child: _BannerImage(
@@ -585,7 +644,8 @@ class _ActiveBannerHero extends StatelessWidget {
                           icon: const Icon(Icons.power_settings_new),
                           label: const Text('Disable Live Popup'),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF991B1B), // Dark Red
+                            backgroundColor:
+                                const Color(0xFF991B1B), // Dark Red
                             foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
@@ -614,10 +674,13 @@ class _ActiveBannerHero extends StatelessWidget {
             ElevatedButton.icon(
               onPressed: onUpload,
               icon: const Icon(Icons.add, color: Colors.black87),
-              label: const Text('Upload Poster', style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w600)),
+              label: const Text('Upload Poster',
+                  style: TextStyle(
+                      color: Colors.black87, fontWeight: FontWeight.w600)),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
               ),
             ),
         ],
@@ -646,8 +709,10 @@ class _HistoryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final borderColor = popup.isActive ? const Color(0xFF10B981) : AppColors.kBorder; // Green border if active
-    
+    final borderColor = popup.isActive
+        ? const Color(0xFF10B981)
+        : AppColors.kBorder; // Green border if active
+
     return Container(
       decoration: BoxDecoration(
         color: AppColors.kSurface,
@@ -677,7 +742,8 @@ class _HistoryCard extends StatelessWidget {
                       top: 10,
                       left: 10,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(
                           color: const Color(0xFF10B981),
                           borderRadius: BorderRadius.circular(6),
@@ -685,9 +751,14 @@ class _HistoryCard extends StatelessWidget {
                         child: const Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.auto_awesome, color: Colors.white, size: 12),
+                            Icon(Icons.auto_awesome,
+                                color: Colors.white, size: 12),
                             SizedBox(width: 4),
-                            Text('LIVE ACTIVE', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700)),
+                            Text('LIVE ACTIVE',
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700)),
                           ],
                         ),
                       ),
@@ -707,15 +778,21 @@ class _HistoryCard extends StatelessWidget {
                     Expanded(
                       child: Text(
                         popup.title,
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.kTextDark),
+                        style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.kTextDark),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
-                        color: popup.isActive ? const Color(0xFFDCFCE7) : const Color(0xFFF1F5F9),
+                        color: popup.isActive
+                            ? const Color(0xFFDCFCE7)
+                            : const Color(0xFFF1F5F9),
                         borderRadius: BorderRadius.circular(99),
                       ),
                       child: Text(
@@ -723,7 +800,9 @@ class _HistoryCard extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
-                          color: popup.isActive ? const Color(0xFF16A34A) : AppColors.kTextMuted,
+                          color: popup.isActive
+                              ? const Color(0xFF16A34A)
+                              : AppColors.kTextMuted,
                         ),
                       ),
                     ),
@@ -732,7 +811,8 @@ class _HistoryCard extends StatelessWidget {
                 const SizedBox(height: 6),
                 Text(
                   '📅 ${formatDate(popup.createdAt)}  •  By ${popup.createdBy ?? 'Admin'}',
-                  style: const TextStyle(fontSize: 13, color: AppColors.kTextMuted),
+                  style: const TextStyle(
+                      fontSize: 13, color: AppColors.kTextMuted),
                 ),
                 const SizedBox(height: 16),
                 Row(
@@ -745,8 +825,10 @@ class _HistoryCard extends StatelessWidget {
                               label: const Text('Deactivate'),
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: AppColors.kDanger,
-                                side: const BorderSide(color: AppColors.kDanger),
-                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                side:
+                                    const BorderSide(color: AppColors.kDanger),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 12),
                               ),
                             )
                           : ElevatedButton.icon(
@@ -756,18 +838,21 @@ class _HistoryCard extends StatelessWidget {
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFFB48629),
                                 foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 12),
                               ),
                             ),
                     ),
                     const SizedBox(width: 12),
                     IconButton(
-                      icon: const Icon(Icons.edit_outlined, color: AppColors.kTextMuted),
+                      icon: const Icon(Icons.edit_outlined,
+                          color: AppColors.kTextMuted),
                       onPressed: onEdit,
                       tooltip: 'Edit',
                     ),
                     IconButton(
-                      icon: const Icon(Icons.delete_outline, color: AppColors.kDanger),
+                      icon: const Icon(Icons.delete_outline,
+                          color: AppColors.kDanger),
                       onPressed: onDelete,
                       tooltip: 'Delete',
                     ),
@@ -796,7 +881,7 @@ class _PromoPopupFormDialog extends StatefulWidget {
 class _PromoPopupFormDialogState extends State<_PromoPopupFormDialog> {
   final _titleController = TextEditingController();
   final _urlController = TextEditingController();
-  
+
   bool _publishLive = false;
   bool _isSaving = false;
   String? _selectedImageBase64; // In a real app, use XFile from image_picker
@@ -821,19 +906,27 @@ class _PromoPopupFormDialogState extends State<_PromoPopupFormDialog> {
     if (image == null) return;
 
     final bytes = await image.readAsBytes();
-    final extension = image.name.toLowerCase().endsWith('.png') ? 'png' : 'jpeg';
+    final extension =
+        image.name.toLowerCase().endsWith('.png') ? 'png' : 'jpeg';
     setState(() {
-      _selectedImageBase64 = 'data:image/$extension;base64,${base64Encode(bytes)}';
+      _selectedImageBase64 =
+          'data:image/$extension;base64,${base64Encode(bytes)}';
     });
   }
 
   Future<void> _save() async {
     if (_titleController.text.trim().isEmpty) {
-      ToastService.show(title: 'Validation Error', message: 'Campaign title is required', type: ToastType.error);
+      ToastService.show(
+          title: 'Validation Error',
+          message: 'Campaign title is required',
+          type: ToastType.error);
       return;
     }
     if (_selectedImageBase64 == null || _selectedImageBase64!.isEmpty) {
-      ToastService.show(title: 'Validation Error', message: 'Poster image is required', type: ToastType.error);
+      ToastService.show(
+          title: 'Validation Error',
+          message: 'Poster image is required',
+          type: ToastType.error);
       return;
     }
 
@@ -843,20 +936,29 @@ class _PromoPopupFormDialogState extends State<_PromoPopupFormDialog> {
       final payload = {
         'title': _titleController.text.trim(),
         'image_url': _selectedImageBase64,
-        'target_url': _urlController.text.trim().isEmpty ? null : _urlController.text.trim(),
+        'target_url': _urlController.text.trim().isEmpty
+            ? null
+            : _urlController.text.trim(),
         'is_active': _publishLive,
       };
 
       if (widget.existing != null) {
         await PromoPopupApiService.updatePopup(widget.existing!.id, payload);
-        ToastService.show(title: 'Success', message: 'Poster updated', type: ToastType.success);
+        ToastService.show(
+            title: 'Success',
+            message: 'Poster updated',
+            type: ToastType.success);
       } else {
         await PromoPopupApiService.createPopup(payload);
-        ToastService.show(title: 'Success', message: 'New poster uploaded', type: ToastType.success);
+        ToastService.show(
+            title: 'Success',
+            message: 'New poster uploaded',
+            type: ToastType.success);
       }
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
-      ToastService.show(title: 'Error saving', message: e.toString(), type: ToastType.error);
+      ToastService.show(
+          title: 'Error saving', message: e.toString(), type: ToastType.error);
       setState(() => _isSaving = false);
     }
   }
@@ -864,161 +966,239 @@ class _PromoPopupFormDialogState extends State<_PromoPopupFormDialog> {
   @override
   Widget build(BuildContext context) {
     final isEdit = widget.existing != null;
-    
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                isEdit ? 'Edit Promotional Poster' : 'Upload New Promotional Poster',
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.kTextDark),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: () => Navigator.pop(context),
-              )
-            ],
-          ),
-          const SizedBox(height: 16),
-          
-          const Text('POSTER CAMPAIGN TITLE', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.kTextMuted)),
-          const SizedBox(height: 6),
-          TextField(
-            controller: _titleController,
-            decoration: const InputDecoration(
-              hintText: 'e.g. Festival Special Offer / Vehicle Scheme',
-              border: OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: 20),
 
-          const Text('POSTER BANNER IMAGE', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.kTextMuted)),
-          const SizedBox(height: 6),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF8FAFC),
-              border: Border.all(color: AppColors.kBorder),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
+    return LayoutBuilder(builder: (context, constraints) {
+      final isNarrow = constraints.maxWidth < 400;
+
+      return Padding(
+        padding: EdgeInsets.all(isNarrow ? 16.0 : 24.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (_selectedImageBase64 != null) ...[
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: _BannerImage(imageUrl: _selectedImageBase64!, width: double.infinity, height: 140),
+                Expanded(
+                  child: Text(
+                    isEdit
+                        ? 'Edit Promotional Poster'
+                        : 'Upload New Promotional Poster',
+                    style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.kTextDark),
                   ),
-                  const SizedBox(height: 16),
-                  OutlinedButton.icon(
-                    onPressed: _pickImage,
-                    icon: const Icon(Icons.image),
-                    label: const Text('Replace Image'),
-                  ),
-                ] else ...[
-                  Container(
-                    height: 120,
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0F172A),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                )
+              ],
+            ),
+            const SizedBox(height: 16),
+            const Text('POSTER CAMPAIGN TITLE',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.kTextMuted)),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _titleController,
+              decoration: const InputDecoration(
+                hintText: 'e.g. Festival Special Offer / Vehicle Scheme',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text('POSTER BANNER IMAGE',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.kTextMuted)),
+            const SizedBox(height: 6),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                border: Border.all(color: AppColors.kBorder),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  if (_selectedImageBase64 != null) ...[
+                    ClipRRect(
                       borderRadius: BorderRadius.circular(8),
+                      child: _BannerImage(
+                          imageUrl: _selectedImageBase64!,
+                          width: double.infinity,
+                          height: 140),
                     ),
-                    child: const Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.image_outlined, color: Colors.white54, size: 32),
-                          SizedBox(height: 8),
-                          Text('No Image', style: TextStyle(color: Colors.white54)),
-                        ],
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      onPressed: _pickImage,
+                      icon: const Icon(Icons.image),
+                      label: const Text('Replace Image'),
+                    ),
+                  ] else ...[
+                    Container(
+                      height: 120,
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F172A),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.image_outlined,
+                                color: Colors.white54, size: 32),
+                            SizedBox(height: 8),
+                            Text('No Image',
+                                style: TextStyle(color: Colors.white54)),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      onPressed: _pickImage,
+                      icon: const Icon(Icons.image),
+                      label: const Text('Select Image File'),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  const Text('Supports PNG/JPG images (e.g. 1000px wide).',
+                      style:
+                          TextStyle(fontSize: 11, color: AppColors.kTextMuted)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text('TARGET LINK URL (OPTIONAL)',
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.kTextMuted)),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _urlController,
+              decoration: const InputDecoration(
+                hintText: 'e.g. https://rrgroups.com/offers or /chits',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+                'Optional: URL opened when a visitor clicks on the poster banner modal.',
+                style: TextStyle(fontSize: 11, color: AppColors.kTextMuted)),
+            const SizedBox(height: 24),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF5F3FF),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Publish Live Immediately',
+                            style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF1E1B4B))),
+                        SizedBox(height: 2),
+                        Text(
+                            'Sets this poster active as the live website popup modal.',
+                            style: TextStyle(
+                                fontSize: 11, color: Color(0xFF6B21A8))),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Switch(
+                    value: _publishLive,
+                    activeThumbColor: const Color(0xFF10B981),
+                    onChanged: (val) => setState(() => _publishLive = val),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            if (isNarrow)
+              Column(
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _isSaving ? null : _save,
+                      icon: _isSaving
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.check_circle_outline),
+                      label: Text(isEdit ? 'Save Changes' : 'Upload & Save'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFB48629),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  OutlinedButton.icon(
-                    onPressed: _pickImage,
-                    icon: const Icon(Icons.image),
-                    label: const Text('Select Image File'),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancel',
+                          style: TextStyle(color: AppColors.kTextDark)),
+                    ),
                   ),
                 ],
-                const SizedBox(height: 8),
-                const Text('Supports PNG/JPG images (e.g. 1000px wide).', style: TextStyle(fontSize: 11, color: AppColors.kTextMuted)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-
-          const Text('TARGET LINK URL (OPTIONAL)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.kTextMuted)),
-          const SizedBox(height: 6),
-          TextField(
-            controller: _urlController,
-            decoration: const InputDecoration(
-              hintText: 'e.g. https://rrgroups.com/offers or /chits',
-              border: OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: 4),
-          const Text('Optional: URL opened when a visitor clicks on the poster banner modal.', style: TextStyle(fontSize: 11, color: AppColors.kTextMuted)),
-          const SizedBox(height: 24),
-
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF5F3FF),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: const Color(0xFFE2E8F0)),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Publish Live Immediately', style: TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF1E1B4B))),
-                    SizedBox(height: 2),
-                    Text('Sets this poster active as the live website popup modal.', style: TextStyle(fontSize: 11, color: Color(0xFF6B21A8))),
-                  ],
-                ),
-                Switch(
-                  value: _publishLive,
-                  activeColor: const Color(0xFF10B981),
-                  onChanged: (val) => setState(() => _publishLive = val),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel', style: TextStyle(color: AppColors.kTextDark)),
+              )
+            else
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancel',
+                        style: TextStyle(color: AppColors.kTextDark)),
+                  ),
+                  const SizedBox(width: 12),
+                  ElevatedButton.icon(
+                    onPressed: _isSaving ? null : _save,
+                    icon: _isSaving
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.check_circle_outline),
+                    label: Text(isEdit ? 'Save Changes' : 'Upload & Save'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFB48629),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24, vertical: 12),
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 12),
-              ElevatedButton.icon(
-                onPressed: _isSaving ? null : _save,
-                icon: _isSaving ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.check_circle_outline),
-                label: Text(isEdit ? 'Save Changes' : 'Upload & Save'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFB48629),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                ),
-              ),
-            ],
-          )
-        ],
-      ),
-    );
+          ],
+        ),
+      );
+    });
   }
 }
 
@@ -1043,13 +1223,18 @@ class _BannerImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (imageUrl.startsWith('http')) {
-      return Image.network(imageUrl, width: width, height: height, fit: fit,
+      return Image.network(
+        imageUrl,
+        width: width,
+        height: height,
+        fit: fit,
         errorBuilder: (_, __, ___) => _errorPlaceholder(),
       );
     } else if (imageUrl.startsWith('data:image')) {
       try {
         final base64Str = imageUrl.split(',').last;
-        return Image.memory(base64Decode(base64Str), width: width, height: height, fit: fit);
+        return Image.memory(base64Decode(base64Str),
+            width: width, height: height, fit: fit);
       } catch (e) {
         return _errorPlaceholder();
       }
@@ -1058,9 +1243,11 @@ class _BannerImage extends StatelessWidget {
   }
 
   Widget _errorPlaceholder() => Container(
-    width: width, height: height, color: Colors.grey[200],
-    child: const Icon(Icons.broken_image, color: Colors.grey),
-  );
+        width: width,
+        height: height,
+        color: Colors.grey[200],
+        child: const Icon(Icons.broken_image, color: Colors.grey),
+      );
 }
 
 /// Modal for clicking an image to see it full screen (image_5abd9f.jpg)
@@ -1076,7 +1263,8 @@ void _showImagePreview(BuildContext context, String imageUrl) {
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(16),
-            child: _BannerImage(imageUrl: imageUrl, width: double.infinity, height: 400), 
+            child: _BannerImage(
+                imageUrl: imageUrl, width: double.infinity, height: 400),
           ),
           Positioned(
             top: -16,

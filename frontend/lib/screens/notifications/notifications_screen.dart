@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import '../../l10n/generated/app_localizations.dart';
 import '../../routes/app_routes.dart';
 import '../../theme/app_theme.dart';
@@ -79,7 +78,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       NotificationState.instance.setCount(list.where((n) => !n.read).length);
     } catch (e) {
       if (!mounted) return;
-      final l10n = AppLocalizations.of(context)!;
+      final l10n = AppLocalizations.of(context);
       setState(() => _error = l10n.failedToLoadNotifications);
       ToastService.show(
         title: l10n.couldNotLoadNotificationsToastTitle,
@@ -157,7 +156,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       }
     });
 
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
 
     try {
       await NotificationService.markAllRead(unreadIds);
@@ -184,7 +183,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   void _deleteNotification(AppNotification n) async {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
     final confirmed = await AppConfirmDialog.show(
       context: context,
       title: l10n.deleteNotificationTitle,
@@ -225,7 +224,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     if (notification.read) return;
 
     setState(() => notification.read = true);
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
 
     try {
       await NotificationService.markRead(notification.id);
@@ -278,7 +277,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
 
     if (_loading) {
       return AppShell(
@@ -568,7 +567,7 @@ class _NotificationCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final n = notification;
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(18),
@@ -733,7 +732,7 @@ class _SendNotificationDialogState extends State<_SendNotificationDialog> {
       if (!mounted) return;
       setState(() => _loadingCustomers = false);
       ToastService.show(
-        title: AppLocalizations.of(context)!.couldNotLoadCustomersToastTitle,
+        title: AppLocalizations.of(context).couldNotLoadCustomersToastTitle,
         message: e.toString(),
         type: ToastType.error,
       );
@@ -755,7 +754,7 @@ class _SendNotificationDialogState extends State<_SendNotificationDialog> {
       : _selectedIds.where(_customerUserIds.containsKey).length;
 
   Future<void> _handleSend() async {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
 
     if (_titleCtrl.text.trim().isEmpty) {
       ToastService.show(title: l10n.titleRequiredError, type: ToastType.error);
@@ -824,7 +823,7 @@ class _SendNotificationDialogState extends State<_SendNotificationDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
+    final l10n = AppLocalizations.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
       child: Column(

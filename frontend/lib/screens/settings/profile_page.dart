@@ -1,13 +1,11 @@
 import 'dart:convert';
 import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-
 import '../../theme/app_theme.dart';
 import '../../theme/glass_toast.dart';
 import '../../widgets/page_header.dart';
 import '../../services/auth_api_service.dart';
+import '../../widgets/app_upload.dart'; 
 
 class ProfilePage extends StatefulWidget {
   final bool showScaffold;
@@ -25,14 +23,13 @@ class _ProfilePageState extends State<ProfilePage> {
   final _aadhaarCtrl = TextEditingController();
   final _panCtrl = TextEditingController();
   final _addressCtrl = TextEditingController();
-  final _imagePicker = ImagePicker();
 
   bool _loading = true;
   bool _saving = false;
   String? _loadError;
 
-  Uint8List? _avatarImageBytes; // newly picked (unsaved) avatar
-  Uint8List? _storedAvatarBytes; // decoded from backend avatar_url
+  Uint8List? _avatarImageBytes; 
+  Uint8List? _storedAvatarBytes; 
 
   String _email = '';
   String _role = '';
@@ -99,7 +96,6 @@ class _ProfilePageState extends State<ProfilePage> {
     setState(() => _loading = false);
   }
 
-  /// avatar_url comes back as a data URI: "data:image/jpeg;base64,...."
   Uint8List? _decodeAvatar(String? avatarUrl) {
     if (avatarUrl == null || avatarUrl.isEmpty) return null;
     final commaIndex = avatarUrl.indexOf(',');
@@ -117,18 +113,8 @@ class _ProfilePageState extends State<ProfilePage> {
     try {
       final date = DateTime.parse(createdAt);
       const months = [
-        'Jan',
-        'Feb',
-        'Mar',
-        'Apr',
-        'May',
-        'Jun',
-        'Jul',
-        'Aug',
-        'Sep',
-        'Oct',
-        'Nov',
-        'Dec',
+        'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
       ];
       return 'Member since ${months[date.month - 1]} ${date.year}';
     } catch (_) {
@@ -136,82 +122,55 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-Future<void> _onSave() async {
-  setState(() => _saving = true);
+  Future<void> _onSave() async {
+    setState(() => _saving = true);
 
-  try {
-    // NEW: encode the newly picked avatar (if any) as a base64 data URI
-    String? avatarBase64;
-    if (_avatarImageBytes != null) {
-      avatarBase64 =
-          'data:image/jpeg;base64,${base64Encode(_avatarImageBytes!)}';
+    try {
+      String? avatarBase64;
+      if (_avatarImageBytes != null) {
+        avatarBase64 =
+            'data:image/jpeg;base64,${base64Encode(_avatarImageBytes!)}';
+      }
+
+      final updated = await AuthApiService.instance.updateProfile(
+        fullName: _nameCtrl.text.trim(),
+        mobile: _mobileCtrl.text.trim(),
+        occupation: _occupationCtrl.text.trim(),
+        aadhaar: _aadhaarCtrl.text.trim(),
+        pan: _panCtrl.text.trim(),
+        address: _addressCtrl.text.trim(),
+        avatarBase64: avatarBase64, 
+      );
+
+      if (!mounted) return;
+      _applyProfile(updated);
+      _avatarImageBytes = null; 
+
+      ToastService.show(
+        title: 'Success',
+        message: 'Profile updated successfully',
+        type: ToastType.success,
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ToastService.show(title: 'Error', message: e.message, type: ToastType.error);
+    } catch (_) {
+      if (!mounted) return;
+      ToastService.show(
+        title: 'Error',
+        message: 'Could not update profile. Try again.',
+        type: ToastType.error,
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
     }
-
-    final updated = await AuthApiService.instance.updateProfile(
-      fullName: _nameCtrl.text.trim(),
-      mobile: _mobileCtrl.text.trim(),
-      occupation: _occupationCtrl.text.trim(),
-      aadhaar: _aadhaarCtrl.text.trim(),
-      pan: _panCtrl.text.trim(),
-      address: _addressCtrl.text.trim(),
-      avatarBase64: avatarBase64, // NEW
-    );
-
-    if (!mounted) return;
-    _applyProfile(updated);
-    _avatarImageBytes = null; // NEW: clear staged pick now that it's saved/synced into _storedAvatarBytes
-
-    ToastService.show(
-      title: 'Success',
-      message: 'Profile updated',
-      type: ToastType.success,
-    );
-  } on ApiException catch (e) {
-    if (!mounted) return;
-    ToastService.show(title: 'Error', message: e.message, type: ToastType.error);
-  } catch (_) {
-    if (!mounted) return;
-    ToastService.show(
-      title: 'Error',
-      message: 'Could not update profile. Try again.',
-      type: ToastType.error,
-    );
-  } finally {
-    if (mounted) setState(() => _saving = false);
   }
-}
 
-
-
+  // UPDATED: Now uses your AppUpload class instead of building the modal manually
   Future<void> _onPickAvatar() async {
-    final source = await showModalBottomSheet<ImageSource>(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_camera_outlined),
-              title: const Text('Camera'),
-              onTap: () => Navigator.pop(context, ImageSource.camera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('Gallery'),
-              onTap: () => Navigator.pop(context, ImageSource.gallery),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (source == null) return;
-
-    final pickedFile = await _imagePicker.pickImage(
-      source: source,
-      imageQuality: 85,
-      maxWidth: 1024,
-    );
+    final pickedFile = await AppUpload.showImagePickerModal(context);
+    
+    // If user canceled the modal, pickedFile will be null
     if (pickedFile == null || !mounted) return;
 
     final imageBytes = await pickedFile.readAsBytes();
@@ -228,7 +187,7 @@ Future<void> _onSave() async {
       content = const Center(
         child: Padding(
           padding: EdgeInsets.all(40),
-          child: CircularProgressIndicator(),
+          child: CircularProgressIndicator(color: AppColors.kGoldDark),
         ),
       );
     } else if (_loadError != null) {
@@ -238,12 +197,21 @@ Future<void> _onSave() async {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              Icon(Icons.error_outline, size: 48, color: Colors.red.shade300),
+              const SizedBox(height: 16),
               Text(_loadError!,
-                  style: const TextStyle(color: AppColors.kTextMuted)),
-              const SizedBox(height: 12),
-              ElevatedButton(
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: AppColors.kTextMuted, fontSize: 16)),
+              const SizedBox(height: 24),
+              ElevatedButton.icon(
                 onPressed: _loadProfile,
-                child: const Text('Retry'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.kGoldDark,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
               ),
             ],
           ),
@@ -252,28 +220,30 @@ Future<void> _onSave() async {
     } else {
       content = SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.only(bottom: 32),
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.only(bottom: 40, top: 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const PageHeader(
-                title: 'My Profile',
-                subtitle: 'Manage your account details and security',
-              ),
+              if (!widget.showScaffold)
+                const PageHeader(
+                  title: 'My Profile',
+                  subtitle: 'Manage your account details and security',
+                ),
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _ProfileHeaderCard(
-                      name: _nameCtrl.text.isEmpty ? '—' : _nameCtrl.text,
+                      name: _nameCtrl.text.isEmpty ? 'User' : _nameCtrl.text,
                       email: _email,
                       role: _role.toUpperCase(),
                       memberSince: _memberSince,
                       avatarImageBytes: _avatarImageBytes ?? _storedAvatarBytes,
                       onPickAvatar: _onPickAvatar,
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 24),
                     _ProfileDetailsCard(
                       nameCtrl: _nameCtrl,
                       mobileCtrl: _mobileCtrl,
@@ -299,13 +269,37 @@ Future<void> _onSave() async {
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      appBar: AppBar(title: const Text('My Profile')),
+      appBar: AppBar(
+        elevation: 0,
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        centerTitle: true,
+        leading: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: IconButton(
+            icon: const Icon(Icons.diamond, color: AppColors.kGoldDark, size: 28),
+            tooltip: 'App Logo',
+            onPressed: () {
+              Navigator.of(context).popUntil((route) => route.isFirst);
+            },
+          ),
+        ),
+        title: const Text(
+          'My Profile',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: AppColors.kTextDark,
+            letterSpacing: -0.5,
+          ),
+        ),
+      ),
       body: content,
     );
   }
 }
 
-/// Top card: avatar + name + email + role badge + "member since".
+/// Modern Top card with gradient ring avatar & sleek layout
 class _ProfileHeaderCard extends StatelessWidget {
   final String name;
   final String email;
@@ -325,154 +319,160 @@ class _ProfileHeaderCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isNarrow = constraints.maxWidth < 500;
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: AppColors.kSurface,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isNarrow = constraints.maxWidth < 400;
 
-        final avatar = Stack(
-          clipBehavior: Clip.none,
-          children: [
-            Container(
-              width: 84,
-              height: 84,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: AppColors.kGold, width: 2),
-              ),
-              child: ClipOval(
-                child: avatarImageBytes == null
-                    ? const ColoredBox(
-                        color: AppColors.kBorder,
-                        child: Icon(Icons.person,
-                            size: 40, color: AppColors.kTextMuted),
-                      )
-                    : Image.memory(
-                        avatarImageBytes!,
-                        fit: BoxFit.cover,
-                        width: 84,
-                        height: 84,
-                      ),
-              ),
-            ),
-            Positioned(
-              right: -2,
-              bottom: -2,
-              child: GestureDetector(
-                onTap: onPickAvatar,
+          final avatar = Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(4),
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: [AppColors.kGoldLight, AppColors.kGoldDark],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                ),
                 child: Container(
-                  padding: const EdgeInsets.all(6),
+                  width: 90,
+                  height: 90,
                   decoration: const BoxDecoration(
-                    color: AppColors.kGoldDark,
+                    color: Colors.white,
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.camera_alt,
-                      size: 16, color: Colors.white),
-                ),
-              ),
-            ),
-          ],
-        );
-
-        Widget nameEmailRoleBlock({required CrossAxisAlignment align}) {
-          return Column(
-            crossAxisAlignment: align,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                name,
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.kTextDark,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(email,
-                  style: const TextStyle(
-                      fontSize: 14, color: AppColors.kTextMuted)),
-              if (memberSince != null) ...[
-                const SizedBox(height: 2),
-                Text(memberSince!,
-                    style: const TextStyle(
-                        fontSize: 12, color: AppColors.kTextMuted)),
-              ],
-              const SizedBox(height: 10),
-              Wrap(
-                alignment: align == CrossAxisAlignment.center
-                    ? WrapAlignment.center
-                    : WrapAlignment.start,
-                spacing: 10,
-                runSpacing: 8,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: AppColors.kGoldLight.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.verified_user,
-                            size: 14, color: AppColors.kGoldDark),
-                        const SizedBox(width: 6),
-                        Text(
-                          role,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.kGoldDark,
-                            letterSpacing: 0.5,
+                  child: ClipOval(
+                    child: avatarImageBytes == null
+                        ? const Icon(Icons.person, size: 45, color: AppColors.kBorder)
+                        : Image.memory(
+                            avatarImageBytes!,
+                            fit: BoxFit.cover,
+                            width: 90,
+                            height: 90,
                           ),
+                  ),
+                ),
+              ),
+              Positioned(
+                right: -4,
+                bottom: 0,
+                child: GestureDetector(
+                  onTap: onPickAvatar,
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.kGoldDark,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: AppColors.kSurface, width: 3),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.kGoldDark.withValues(alpha: 0.3),
+                          blurRadius: 8,
+                          offset: const Offset(0, 4),
                         ),
                       ],
                     ),
+                    child: const Icon(Icons.camera_alt, size: 16, color: Colors.white),
                   ),
-                ],
+                ),
               ),
             ],
           );
-        }
 
-        return Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: AppColors.kSurface,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.kBorder),
-          ),
-          child: isNarrow
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    avatar,
-                    const SizedBox(height: 16),
-                    Center(
-                      child:
-                          nameEmailRoleBlock(align: CrossAxisAlignment.center),
-                    ),
-                  ],
-                )
-              : Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    avatar,
-                    const SizedBox(width: 20),
-                    Expanded(
-                      child:
-                          nameEmailRoleBlock(align: CrossAxisAlignment.start),
-                    ),
-                  ],
+          Widget nameEmailRoleBlock({required CrossAxisAlignment align}) {
+            return Column(
+              crossAxisAlignment: align,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.kTextDark,
+                    letterSpacing: -0.5,
+                  ),
                 ),
-        );
-      },
+                const SizedBox(height: 4),
+                Text(email,
+                    style: const TextStyle(fontSize: 14, color: AppColors.kTextMuted)),
+                if (memberSince != null) ...[
+                  const SizedBox(height: 4),
+                  Text(memberSince!,
+                      style: const TextStyle(fontSize: 12, color: AppColors.kTextMuted)),
+                ],
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.kGoldLight.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: AppColors.kGoldLight.withValues(alpha: 0.5)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.verified, size: 16, color: AppColors.kGoldDark),
+                      const SizedBox(width: 6),
+                      Text(
+                        role,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.kGoldDark,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          }
+
+          if (isNarrow) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                avatar,
+                const SizedBox(height: 20),
+                nameEmailRoleBlock(align: CrossAxisAlignment.center),
+              ],
+            );
+          }
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              avatar,
+              const SizedBox(width: 24),
+              Expanded(
+                child: nameEmailRoleBlock(align: CrossAxisAlignment.start),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 }
 
-/// Details form card — responsive 2-column grid (1 column on narrow screens).
+/// Stylish forms with filled backgrounds and floating layout
 class _ProfileDetailsCard extends StatelessWidget {
   final TextEditingController nameCtrl;
   final TextEditingController mobileCtrl;
@@ -497,11 +497,17 @@ class _ProfileDetailsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         color: AppColors.kSurface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.kBorder),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -509,7 +515,7 @@ class _ProfileDetailsCard extends StatelessWidget {
           final fieldWidth =
               isNarrow ? constraints.maxWidth : (constraints.maxWidth - 20) / 2;
 
-          Widget field({
+          Widget buildTextField({
             required String label,
             required IconData icon,
             required TextEditingController controller,
@@ -523,29 +529,51 @@ class _ProfileDetailsCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.kTextMuted,
-                      letterSpacing: 0.5,
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4, bottom: 8),
+                    child: Text(
+                      label,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.kTextMuted,
+                        letterSpacing: 0.8,
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 8),
                   TextField(
                     controller: controller,
                     keyboardType: keyboardType,
                     maxLines: maxLines,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.kTextDark,
+                    ),
                     decoration: InputDecoration(
+                      filled: true,
+                      fillColor: Colors.grey.withValues(alpha: 0.05),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                       prefixIcon: maxLines > 1
                           ? Padding(
                               padding: const EdgeInsets.only(bottom: 40),
-                              child: Icon(icon,
-                                  size: 20, color: AppColors.kTextMuted),
+                              child: Icon(icon, size: 22, color: AppColors.kTextMuted),
                             )
-                          : Icon(icon, size: 20, color: AppColors.kTextMuted),
+                          : Icon(icon, size: 22, color: AppColors.kTextMuted),
                       hintText: hint,
+                      hintStyle: TextStyle(color: Colors.grey.shade400, fontWeight: FontWeight.w400),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: BorderSide.none,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: BorderSide(color: Colors.grey.withValues(alpha: 0.1), width: 1),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(16),
+                        borderSide: const BorderSide(color: AppColors.kGoldDark, width: 1.5),
+                      ),
                     ),
                   ),
                 ],
@@ -559,60 +587,61 @@ class _ProfileDetailsCard extends StatelessWidget {
               Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(8),
+                    padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: AppColors.kGoldLight.withValues(alpha: 0.35),
-                      borderRadius: BorderRadius.circular(8),
+                      color: AppColors.kGoldLight.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(Icons.person_outline,
-                        size: 18, color: AppColors.kGoldDark),
+                    child: const Icon(Icons.manage_accounts_outlined,
+                        size: 20, color: AppColors.kGoldDark),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 12),
                   const Text(
-                    'Profile Details',
+                    'Personal Details',
                     style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.kTextDark),
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.kTextDark,
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 24),
               Wrap(
                 spacing: 20,
                 runSpacing: 20,
                 children: [
-                  field(
+                  buildTextField(
                     label: 'FULL NAME',
                     icon: Icons.person_outline,
                     controller: nameCtrl,
                   ),
-                  field(
+                  buildTextField(
                     label: 'MOBILE NUMBER',
                     icon: Icons.phone_outlined,
                     controller: mobileCtrl,
                     keyboardType: TextInputType.phone,
                   ),
-                  field(
+                  buildTextField(
                     label: 'OCCUPATION',
                     icon: Icons.work_outline,
                     controller: occupationCtrl,
                     hint: 'e.g. Manager',
                   ),
-                  field(
+                  buildTextField(
                     label: 'AADHAAR',
                     icon: Icons.fingerprint,
                     controller: aadhaarCtrl,
-                    hint: 'Aadhaar number',
+                    hint: '12-digit number',
                     keyboardType: TextInputType.number,
                   ),
-                  field(
+                  buildTextField(
                     label: 'PAN',
                     icon: Icons.credit_card_outlined,
                     controller: panCtrl,
-                    hint: 'PAN number',
+                    hint: '10-character code',
                   ),
-                  field(
+                  buildTextField(
                     label: 'ADDRESS',
                     icon: Icons.location_on_outlined,
                     controller: addressCtrl,
@@ -622,23 +651,34 @@ class _ProfileDetailsCard extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 24),
-              Align(
-                alignment: Alignment.centerRight,
-                child: SizedBox(
-                  width: isNarrow ? double.infinity : null,
-                  child: ElevatedButton.icon(
-                    onPressed: saving ? null : onSave,
-                    icon: saving
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white),
-                          )
-                        : const Icon(Icons.save_outlined, size: 18),
-                    label: Text(saving ? 'Saving...' : 'Save Changes'),
+              const SizedBox(height: 32),
+              SizedBox(
+                width: double.infinity,
+                height: 56,
+                child: ElevatedButton(
+                  onPressed: saving ? null : onSave,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.kGoldDark,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
                   ),
+                  child: saving
+                      ? const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
+                            ),
+                            SizedBox(width: 12),
+                            Text('Saving changes...', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                          ],
+                        )
+                      : const Text('Save Changes', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
                 ),
               ),
             ],

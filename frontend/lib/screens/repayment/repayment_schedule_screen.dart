@@ -4,11 +4,11 @@ import '../../widgets/app_shell.dart';
 import '../../widgets/status_badge.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/glass_toast.dart';
+import '../../models/customer.dart';
 import '../../models/loan_record.dart';
 import '../../models/repayment_installment.dart';
 import '../../models/user_role.dart';
 import '../../services/api_service_repayment.dart';
-import '../../services/collection_api_service.dart';
 import '../../services/loan_service.dart';
 import '../../services/session_service.dart';
 import '../../l10n/generated/app_localizations.dart';
@@ -35,6 +35,28 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
   List<LoanRecord> _loanOptions = [];
   LoanRecord? _selectedLoan;
   List<RepaymentInstallment> _installments = [];
+  List<Customer> _customers = [];
+
+  /// The customer's full name for a loan.
+  ///
+  /// `LoanRecord.customerName` is only as good as the `customer_name` value
+  /// stored on the loan row itself, which can drift stale — so this looks
+  /// the loan's customer up by id and prefers the customer record's own
+  /// `full_name`, falling back to the loan's stored name only when no
+  /// matching customer record is loaded.
+  String _customerLabelFor(LoanRecord? loan) {
+    if (loan == null) return '-';
+    final id = loan.customerId;
+    if (id != null && id.isNotEmpty) {
+      for (final c in _customers) {
+        if (c.id == id) {
+          if (c.fullName.isNotEmpty && c.fullName != 'Unnamed') return c.fullName;
+          break;
+        }
+      }
+    }
+    return loan.customerName;
+  }
 
   @override
   void initState() {
@@ -51,6 +73,7 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
       _loanOptions = [];
       _selectedLoan = null;
       _installments = [];
+      _customers = [];
     });
 
     final l10n = AppLocalizations.of(context);
@@ -67,12 +90,14 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
       final filteredLoans = loans.where((loan) {
         if (loan.status == 'Closed') return false;
         if (_isCustomer && _customerId != null) {
-          return loan.customerId == _customerId;
+          return (loan.customerId ?? '').trim().toLowerCase() ==
+              _customerId!.trim().toLowerCase();
         }
         return true;
       }).toList();
       if (!mounted) return;
       setState(() {
+        _customers = customers;
         _loanOptions = filteredLoans;
         _selectedLoan = filteredLoans.isNotEmpty ? filteredLoans.first : null;
       });
@@ -162,104 +187,10 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
   }
 
   // ---- Record Collection -------------------------------------------
-
-  void _showRecordCollectionSheet() {
-    final l10n = AppLocalizations.of(context);
-    final loan = _selectedLoan;
-    if (loan == null) {
-      ToastService.show(
-        title: l10n.repaymentRecordCollectionSelectLoanFirst,
-        type: ToastType.warning,
-      );
-      return;
-    }
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.4),
-      builder: (sheetContext) => Padding(
-        padding:
-            EdgeInsets.only(bottom: MediaQuery.of(sheetContext).viewInsets.bottom),
-        child: _RecordCollectionSheet(
-          loan: loan,
-          installments: _unpaidInstallments,
-          onSubmit: _recordCollection,
-        ),
-      ),
-    );
-  }
-
-  String _apiMethodValue(String uiMethod) {
-    switch (uiMethod) {
-      case 'UPI':
-        return 'upi';
-      case 'Bank Transfer':
-        return 'bank';
-      case 'Cheque':
-        return 'cheque';
-      case 'Card':
-        return 'card';
-      default:
-        return 'cash';
-    }
-  }
-
-  Future<bool> _recordCollection({
-    required RepaymentInstallment? installment,
-    required double amount,
-    required String method,
-    required DateTime date,
-    required String notes,
-  }) async {
-    final l10n = AppLocalizations.of(context);
-    final loan = _selectedLoan;
-    if (loan == null) return false;
-
-    final currentUser = SessionService.instance.currentUser;
-    final isAgentRole = currentUser?.role == UserRole.agent;
-    final receipt =
-        'RCP-${(DateTime.now().millisecondsSinceEpoch % 100000000).toString().padLeft(8, '0')}';
-    final isoDate = '${date.year.toString().padLeft(4, '0')}-'
-        '${date.month.toString().padLeft(2, '0')}-'
-        '${date.day.toString().padLeft(2, '0')}';
-
-    try {
-      final payload = {
-        'receipt_number': receipt,
-        'customer_id': loan.customerId,
-        'customer_name': loan.customerName,
-        'loan_id': loan.id,
-        'loan_number': loan.loanNumber,
-        'loan_type': loan.collectionType.toLowerCase(),
-        'collection_amount': amount,
-        'payment_method': _apiMethodValue(method),
-        'collection_date': isoDate,
-        'agent_id': isAgentRole ? currentUser?.userId : loan.agentId,
-        'agent_name': isAgentRole ? currentUser?.name : loan.agentName,
-        'notes': [
-          if (installment != null) 'Installment #${installment.installmentNo}',
-          if (notes.trim().isNotEmpty) notes.trim(),
-        ].join(' | '),
-      };
-      await CollectionApiService.createCollection(payload);
-      if (!mounted) return true;
-      ToastService.show(
-        title: l10n.repaymentRecordCollectionSuccessTitle,
-        message: loan.loanNumber,
-        type: ToastType.success,
-      );
-      await _loadSchedule();
-      return true;
-    } catch (e) {
-      if (!mounted) return false;
-      ToastService.show(
-        title: l10n.repaymentRecordCollectionFailedTitle,
-        message: e.toString(),
-        type: ToastType.error,
-      );
-      return false;
-    }
+  // The button no longer opens an in-page form — it hands off to the full
+  // Collections screen instead.
+  void _goToCollections() {
+    Navigator.of(context).pushNamed(AppRoutes.collections);
   }
 
   @override
@@ -344,7 +275,7 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
     final recordButton = _isCustomer
         ? null
         : ElevatedButton.icon(
-            onPressed: _selectedLoan == null ? null : _showRecordCollectionSheet,
+            onPressed: _goToCollections,
             icon: const Icon(Icons.payments_outlined, size: 20),
             label: Text(l10n.repaymentRecordCollectionButton),
             style: ElevatedButton.styleFrom(
@@ -382,6 +313,50 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
 
   // Loan selector card
   Widget _buildLoanSelector(AppLocalizations l10n) {
+    if (_isCustomer) {
+      final selected = _selectedLoan;
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.kSurface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.kBorder),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.account_balance_wallet_outlined,
+                color: AppColors.kGold, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Customer Loan',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.kTextMuted,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    selected == null
+                        ? 'No active loan found'
+                        : '${selected.loanNumber} • ${_customerLabelFor(selected)}',
+                    style: const TextStyle(
+                        fontSize: 14,
+                        color: AppColors.kTextDark,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -424,7 +399,7 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
             items: _loanOptions
                 .map((loan) => DropdownMenuItem<LoanRecord>(
                       value: loan,
-                      child: Text('${loan.loanNumber} — ${loan.customerName}'),
+                      child: Text('${loan.loanNumber} + ${_customerLabelFor(loan)}'),
                     ))
                 .toList(),
             onChanged: _loanOptions.isEmpty
@@ -593,7 +568,7 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
 
     final cards = <Widget>[
       _buildStatCard(l10n.repaymentStatLoanNumber, _selectedLoan?.loanNumber ?? '-', icon: Icons.badge_outlined),
-      _buildStatCard(l10n.repaymentStatCustomer, _selectedLoan?.customerName ?? '-', icon: Icons.person_outline),
+      _buildStatCard(l10n.repaymentStatCustomer, _customerLabelFor(_selectedLoan), icon: Icons.person_outline),
       _buildStatCard(l10n.repaymentStatLoanAmount, _selectedLoan?.formattedAmount ?? '-',
           icon: Icons.account_balance_wallet_outlined),
       _buildStatCard(l10n.repaymentStatEmi, fmt(emi), icon: Icons.calendar_month_outlined),
@@ -657,22 +632,29 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: textColor?.withOpacity(0.85) ?? AppColors.kTextMuted,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.3,
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color:
+                        textColor?.withOpacity(0.85) ?? AppColors.kTextMuted,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.3,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-              if (icon != null)
+              if (icon != null) ...[
+                const SizedBox(width: 6),
                 Icon(icon,
                     size: 16,
                     color: textColor?.withOpacity(0.6) ??
                         AppColors.kTextMuted.withOpacity(0.6)),
+              ],
             ],
           ),
           Text(
@@ -788,377 +770,6 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------
-// Record Collection bottom sheet
-// ---------------------------------------------------------------------
-
-class _RecordCollectionSheet extends StatefulWidget {
-  final LoanRecord loan;
-  final List<RepaymentInstallment> installments; // unpaid only, sorted
-  final Future<bool> Function({
-    required RepaymentInstallment? installment,
-    required double amount,
-    required String method,
-    required DateTime date,
-    required String notes,
-  }) onSubmit;
-
-  const _RecordCollectionSheet({
-    required this.loan,
-    required this.installments,
-    required this.onSubmit,
-  });
-
-  @override
-  State<_RecordCollectionSheet> createState() =>
-      _RecordCollectionSheetState();
-}
-
-class _RecordCollectionSheetState extends State<_RecordCollectionSheet> {
-  static const List<String> _paymentMethods = [
-    'Cash',
-    'UPI',
-    'Bank Transfer',
-    'Cheque',
-    'Card',
-  ];
-
-  RepaymentInstallment? _selectedInstallment;
-  final TextEditingController _amountController = TextEditingController();
-  final TextEditingController _notesController = TextEditingController();
-  String _method = 'Cash';
-  DateTime _date = DateTime.now();
-  bool _submitting = false;
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.installments.isNotEmpty) {
-      _selectedInstallment = widget.installments.first;
-      _prefillAmount(_selectedInstallment);
-    }
-  }
-
-  @override
-  void dispose() {
-    _amountController.dispose();
-    _notesController.dispose();
-    super.dispose();
-  }
-
-  void _prefillAmount(RepaymentInstallment? inst) {
-    final due = inst != null
-        ? (inst.balance + inst.penaltyAmount)
-        : widget.loan.emiAmount;
-    if (due > 0) {
-      _amountController.text = due.round().toString();
-    }
-  }
-
-  String _localizedMethod(String key, AppLocalizations l10n) {
-    switch (key) {
-      case 'UPI':
-        return l10n.collectionsMethodUpi;
-      case 'Bank Transfer':
-        return l10n.collectionsMethodBank;
-      case 'Cheque':
-        return l10n.collectionsMethodCheque;
-      case 'Card':
-        return l10n.collectionsMethodCard;
-      default:
-        return l10n.collectionsMethodCash;
-    }
-  }
-
-  Future<void> _pickDate() async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: _date,
-      firstDate: DateTime(2000),
-      lastDate: DateTime.now().add(const Duration(days: 1)),
-    );
-    if (picked != null) setState(() => _date = picked);
-  }
-
-  String _fmtDate(DateTime d) {
-    const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-    ];
-    return '${d.day.toString().padLeft(2, '0')} ${months[d.month - 1]} ${d.year}';
-  }
-
-  Future<void> _submit() async {
-    final l10n = AppLocalizations.of(context);
-    final amount = double.tryParse(_amountController.text.trim());
-    if (amount == null || amount <= 0) {
-      ToastService.show(
-        title: l10n.repaymentRecordCollectionAmountRequired,
-        type: ToastType.error,
-      );
-      return;
-    }
-    setState(() => _submitting = true);
-    final ok = await widget.onSubmit(
-      installment: _selectedInstallment,
-      amount: amount,
-      method: _method,
-      date: _date,
-      notes: _notesController.text,
-    );
-    if (!mounted) return;
-    setState(() => _submitting = false);
-    if (ok) Navigator.of(context).pop();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    final maxSheetHeight = MediaQuery.of(context).size.height * 0.85;
-
-    return Container(
-      constraints: BoxConstraints(maxHeight: maxSheetHeight),
-      decoration: const BoxDecoration(
-        color: AppColors.kSurface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        boxShadow: [
-          BoxShadow(color: Colors.black26, blurRadius: 24, offset: Offset(0, -6)),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.kBorder,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: AppColors.kGold.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(Icons.payments_outlined,
-                        color: AppColors.kGoldDark, size: 20),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          l10n.repaymentRecordCollectionSheetTitle,
-                          style: const TextStyle(
-                              fontSize: 17, fontWeight: FontWeight.bold),
-                        ),
-                        Text(
-                          l10n.repaymentRecordCollectionSubtitle(
-                              widget.loan.loanNumber, widget.loan.customerName),
-                          style: const TextStyle(
-                              fontSize: 12.5, color: AppColors.kTextMuted),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-              if (widget.installments.isEmpty) ...[
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: AppColors.kSuccess.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: AppColors.kSuccess.withOpacity(0.3)),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.check_circle_outline,
-                          color: AppColors.kSuccess, size: 18),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          l10n.repaymentRecordCollectionAllPaidMessage,
-                          style: const TextStyle(fontSize: 12.5),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-              ] else ...[
-                _fieldLabel(l10n.repaymentRecordCollectionInstallmentLabel),
-                const SizedBox(height: 8),
-                DropdownButtonFormField<String>(
-                  initialValue: _selectedInstallment?.id ?? 'general',
-                  isExpanded: true,
-                  decoration: _inputDecoration(),
-                  items: [
-                    DropdownMenuItem(
-                      value: 'general',
-                      child: Text(l10n.repaymentRecordCollectionGeneralPayment),
-                    ),
-                    ...widget.installments.map((inst) => DropdownMenuItem(
-                          value: inst.id,
-                          child: Text(
-                            '#${inst.installmentNo} · ${inst.dueDateDisplay} · ${inst.balanceDisplay}',
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        )),
-                  ],
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedInstallment = value == null || value == 'general'
-                          ? null
-                          : widget.installments
-                              .where((i) => i.id == value)
-                              .firstOrNull;
-                      _prefillAmount(_selectedInstallment);
-                    });
-                  },
-                ),
-                const SizedBox(height: 16),
-              ],
-              _fieldLabel(l10n.repaymentRecordCollectionAmountLabel),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _amountController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: _inputDecoration(prefixText: '₹ '),
-              ),
-              const SizedBox(height: 16),
-              _fieldLabel(l10n.repaymentRecordCollectionMethodLabel),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                initialValue: _method,
-                isExpanded: true,
-                decoration: _inputDecoration(),
-                items: _paymentMethods
-                    .map((m) => DropdownMenuItem(
-                          value: m,
-                          child: Text(_localizedMethod(m, l10n)),
-                        ))
-                    .toList(),
-                onChanged: (value) {
-                  if (value != null) setState(() => _method = value);
-                },
-              ),
-              const SizedBox(height: 16),
-              _fieldLabel(l10n.repaymentRecordCollectionDateLabel),
-              const SizedBox(height: 8),
-              InkWell(
-                onTap: _pickDate,
-                borderRadius: BorderRadius.circular(10),
-                child: InputDecorator(
-                  decoration: _inputDecoration(),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(_fmtDate(_date)),
-                      const Icon(Icons.calendar_today_outlined,
-                          size: 17, color: AppColors.kTextMuted),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              _fieldLabel(l10n.repaymentRecordCollectionNotesLabel),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _notesController,
-                minLines: 2,
-                maxLines: 3,
-                decoration: _inputDecoration(
-                    hintText: l10n.repaymentRecordCollectionNotesHint),
-              ),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _submitting ? null : _submit,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.kGold,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                  ),
-                  child: _submitting
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : Text(l10n.repaymentRecordCollectionSubmit,
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
-                ),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: TextButton(
-                  onPressed:
-                      _submitting ? null : () => Navigator.of(context).pop(),
-                  child: Text(l10n.repaymentRecordCollectionCancel),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _fieldLabel(String text) => Text(
-        text,
-        style: const TextStyle(
-          fontSize: 12,
-          color: AppColors.kTextMuted,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 0.5,
-        ),
-      );
-
-  InputDecoration _inputDecoration({String? prefixText, String? hintText}) {
-    return InputDecoration(
-      prefixText: prefixText,
-      hintText: hintText,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: AppColors.kBorder),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: AppColors.kBorder),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: AppColors.kGold, width: 1.4),
       ),
     );
   }

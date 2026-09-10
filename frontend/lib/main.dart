@@ -34,7 +34,7 @@ import 'screens/Recycle Bin/recycle_bin_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/settings/profile_page.dart';
 import 'widgets/app_shell.dart';
-import 'screens/agent_page.dart';
+import 'screens/agent/agent_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

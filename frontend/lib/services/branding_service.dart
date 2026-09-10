@@ -78,7 +78,7 @@ Future<void> refreshFromServer() async {
     // debugPrint('BrandingService: parsed company_name=${fresh.companyName} logo_url=${fresh.logoUrl}');
     branding.value = fresh;
     await _save(fresh);
-  } catch (e, st) {
+  } catch (e) {
     // debugPrint('BrandingService: refreshFromServer failed: $e');
     // debugPrint('$st');
   }

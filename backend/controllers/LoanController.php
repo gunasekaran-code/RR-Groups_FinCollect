@@ -1,7 +1,7 @@
 <?php
 // Loans CRUD with role enforcement:
-//   - Read:   any authenticated user (the frontend scopes rows per role —
-//             customers see only their own loans, agents their assigned ones).
+//   - Read:   admin sees every loan; an agent sees only the loans assigned
+//             to them (AgentScope); a customer only their own.
 //   - Create: admin only (a loan_number is auto-filled if the client omits one).
 //             Loan origination is an underwriting decision, so the agent panel
 //             has no Create Loan button and the POST is rejected here too.
@@ -49,6 +49,14 @@ class LoanController extends ResourceController
         // dropdown for them, but that is cosmetic — this is the actual rule.
         if ($role === 'agent' && in_array($method, ['POST', 'PATCH', 'PUT'], true)) {
             $this->forceOwnAgent($method, $claims);
+        }
+
+        // An agent reads, edits and deletes only the loans assigned to them.
+        // Applied to writes too: pinning assigned_agent on the way in stops a
+        // loan being handed away, but not a PATCH aimed by id at one that was
+        // never theirs.
+        if ($method !== 'POST') {
+            AgentScope::apply($this->model::table(), $role, $claims['sub'] ?? null);
         }
 
         parent::handle();

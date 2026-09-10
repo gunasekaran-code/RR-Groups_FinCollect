@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import '../../models/customer.dart';
 import '../../theme/app_theme.dart';
 import '../../routes/app_routes.dart';
@@ -12,7 +11,85 @@ import '../../theme/confirm_dialog.dart';
 import '../../services/photo_service.dart';
 import '../../services/location_service.dart';
 import '../../services/customer_api_service.dart';
-import '../../l10n/generated/app_localizations.dart';
+import '../../services/session_service.dart';
+import '../../models/user_role.dart';
+import '../agent/agent_page.dart' show StatCard;
+
+// ---------------------------------------------------------
+// Shared helpers for decoding & rendering stored photos.
+// Photos are stored as base64 data URIs (e.g.
+// "data:image/jpeg;base64,...."), but this also gracefully
+// handles a plain https URL if the backend ever returns one.
+// ---------------------------------------------------------
+
+Uint8List? decodePhotoBytes(String? data) {
+  if (data == null || data.isEmpty) return null;
+  if (data.startsWith('http://') || data.startsWith('https://')) return null;
+  try {
+    final base64Part = data.contains(',') ? data.split(',').last : data;
+    return base64Decode(base64Part);
+  } catch (_) {
+    return null;
+  }
+}
+
+class DocumentImage extends StatelessWidget {
+  final String? data;
+  final BoxFit fit;
+  const DocumentImage({super.key, required this.data, this.fit = BoxFit.cover});
+
+  @override
+  Widget build(BuildContext context) {
+    final url = data;
+    if (url == null || url.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return Image.network(url, fit: fit);
+    }
+    final bytes = decodePhotoBytes(url);
+    if (bytes == null) return const SizedBox.shrink();
+    return Image.memory(bytes, fit: fit);
+  }
+}
+
+// Full-screen tap-to-zoom viewer for a single document/photo.
+class FullScreenImageViewer extends StatelessWidget {
+  final String data;
+  final String title;
+  const FullScreenImageViewer(
+      {super.key, required this.data, required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: Text(title),
+      ),
+      body: Center(
+        child: InteractiveViewer(
+          minScale: 0.5,
+          maxScale: 5,
+          child: DocumentImage(data: data, fit: BoxFit.contain),
+        ),
+      ),
+    );
+  }
+}
+
+void openImageViewer(BuildContext context, String? data, String title) {
+  if (data == null || data.isEmpty) return;
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => FullScreenImageViewer(data: data, title: title),
+      fullscreenDialog: true,
+    ),
+  );
+}
 
 class CustomersScreen extends StatefulWidget {
   const CustomersScreen({super.key});
@@ -25,13 +102,23 @@ class _CustomersScreenState extends State<CustomersScreen> {
   final _api = CustomerApiService();
 
   String _query = '';
-  // Internal filter keys stay in English; only the displayed label is localized.
   String _statusFilter = 'All Status';
 
   bool _loading = true;
   String? _error;
   List<Customer> _customers = [];
   List<AgentOption> _agents = [];
+
+  bool get _isAgent =>
+      SessionService.instance.currentUser?.role == UserRole.agent;
+
+  int get _totalCustomers => _customers.length;
+  int get _activeCustomers =>
+      _customers.where((c) => _statusLabel(c.loanStatus) == 'Active').length;
+  int get _overdueCustomers =>
+      _customers.where((c) => _statusLabel(c.loanStatus) == 'Overdue').length;
+  int get _inactiveCustomers =>
+      _customers.where((c) => _statusLabel(c.loanStatus) == 'Inactive').length;
 
   @override
   void initState() {
@@ -58,9 +145,8 @@ class _CustomersScreenState extends State<CustomersScreen> {
         _error = e.toString();
         _loading = false;
       });
-      final l10n = AppLocalizations.of(context);
       ToastService.show(
-        title: l10n.customersLoadFailedTitle,
+        title: 'Failed to Load Customers',
         message: _error!,
         type: ToastType.error,
       );
@@ -77,7 +163,6 @@ class _CustomersScreenState extends State<CustomersScreen> {
     }
   }
 
-  // Maps the SQL enum ('none'|'active'|'overdue'|'closed') to internal filter labels.
   String _statusLabel(String loanStatus) {
     switch (loanStatus) {
       case 'active':
@@ -88,22 +173,6 @@ class _CustomersScreenState extends State<CustomersScreen> {
         return 'Inactive';
       default:
         return 'Active';
-    }
-  }
-
-  // Maps an internal filter key (English constant) to its localized display text.
-  String _filterDisplayLabel(String key, AppLocalizations l10n) {
-    switch (key) {
-      case 'All Status':
-        return l10n.customersFilterAll;
-      case 'Active':
-        return l10n.customersFilterActive;
-      case 'Overdue':
-        return l10n.customersFilterOverdue;
-      case 'Inactive':
-        return l10n.customersFilterInactive;
-      default:
-        return key;
     }
   }
 
@@ -127,8 +196,8 @@ class _CustomersScreenState extends State<CustomersScreen> {
           ),
           child: SafeArea(
             top: false,
-            child:
-                SingleChildScrollView(child: _CustomerViewSheet(customer: c)),
+            child: SingleChildScrollView(
+                child: _CustomerViewSheet(customer: c, agents: _agents)),
           ),
         ),
       ),
@@ -136,12 +205,12 @@ class _CustomersScreenState extends State<CustomersScreen> {
   }
 
   Future<void> _deleteCustomer(Customer c) async {
-    final l10n = AppLocalizations.of(context);
     final confirmed = await AppConfirmDialog.show(
       context: context,
-      title: l10n.customersDeleteTitle,
-      message: l10n.customersDeleteMessage(c.fullName),
-      confirmLabel: l10n.delete,
+      title: 'Delete Customer',
+      message:
+          'Are you sure you want to delete ${c.fullName}? This action cannot be undone.',
+      confirmLabel: 'Delete',
       confirmButtonColor: AppColors.kDanger,
     );
     if (confirmed != true || !mounted) return;
@@ -149,17 +218,16 @@ class _CustomersScreenState extends State<CustomersScreen> {
     try {
       await _api.delete(c.id);
       if (!mounted) return;
-      // Re-fetch from the database instead of trusting a local removeWhere.
       await _loadCustomers();
       if (!mounted) return;
       ToastService.show(
-        title: l10n.customersDeletedTitle,
-        message: l10n.customersDeletedMessage(c.fullName),
+        title: 'Customer Deleted',
+        message: '${c.fullName} has been removed.',
         type: ToastType.success,
       );
     } catch (e) {
       ToastService.show(
-        title: l10n.customersDeleteFailedTitle,
+        title: 'Delete Failed',
         message: e.toString(),
         type: ToastType.error,
       );
@@ -168,7 +236,6 @@ class _CustomersScreenState extends State<CustomersScreen> {
 
   void _showCustomerFormModal({Customer? existingCustomer}) {
     final isEditing = existingCustomer != null;
-    final l10n = AppLocalizations.of(context);
 
     showModalBottomSheet(
       context: context,
@@ -211,17 +278,15 @@ class _CustomersScreenState extends State<CustomersScreen> {
                     if (!mounted) return;
                     Navigator.pop(context);
                     ToastService.show(
-                      title: isEditing
-                          ? l10n.customersUpdatedTitle
-                          : l10n.customersAddedTitle,
+                      title: isEditing ? 'Customer Updated' : 'Customer Added',
                       message: isEditing
-                          ? l10n.customersUpdatedMessage(updated.fullName)
-                          : l10n.customersAddedMessage(updated.fullName),
+                          ? "${updated.fullName}'s details have been updated."
+                          : '${updated.fullName} has been added successfully.',
                       type: ToastType.success,
                     );
                   } catch (e) {
                     ToastService.show(
-                      title: l10n.customersSaveFailedTitle,
+                      title: 'Save Failed',
                       message: e.toString(),
                       type: ToastType.error,
                     );
@@ -235,11 +300,54 @@ class _CustomersScreenState extends State<CustomersScreen> {
     );
   }
 
+  Widget _buildStatsRow(bool isNarrow) {
+    final cards = <Widget>[
+      StatCard(
+        icon: Icons.groups_outlined,
+        iconColor: AppColors.kInfo,
+        iconBg: const Color(0xFFF0F5FF),
+        value: '$_totalCustomers',
+        label: 'Total Customers',
+      ),
+      StatCard(
+        icon: Icons.check_circle_outline,
+        iconColor: AppColors.kSuccess,
+        iconBg: const Color(0xFFF0FDF4),
+        value: '$_activeCustomers',
+        label: 'Active',
+      ),
+      StatCard(
+        icon: Icons.warning_amber_outlined,
+        iconColor: AppColors.kDanger,
+        iconBg: const Color(0xFFFEF2F2),
+        value: '$_overdueCustomers',
+        label: 'Overdue',
+      ),
+      StatCard(
+        icon: Icons.person_off_outlined,
+        iconColor: AppColors.kTextMuted,
+        iconBg: const Color(0xFFF3F4F6),
+        value: '$_inactiveCustomers',
+        label: 'Inactive',
+      ),
+    ];
+
+    return GridView.count(
+      crossAxisCount: isNarrow ? 2 : 4,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      mainAxisSpacing: 12,
+      crossAxisSpacing: isNarrow ? 12 : 16,
+      childAspectRatio: isNarrow ? 1.3 : 1.7,
+      children: cards,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    final isNarrow = MediaQuery.of(context).size.width < 700;
     final filtered = _customers.where((c) {
       final matchesName =
           c.fullName.toLowerCase().contains(_query.toLowerCase());
@@ -250,7 +358,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
 
     return AppShell(
       currentRoute: AppRoutes.customers,
-      title: l10n.customersTitle,
+      title: 'Customers',
       body: Container(
         color: theme.scaffoldBackgroundColor,
         child: RefreshIndicator(
@@ -258,9 +366,9 @@ class _CustomersScreenState extends State<CustomersScreen> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              PageHeader(
-                title: l10n.customersTitle,
-                subtitle: l10n.customersSubtitle,
+              const PageHeader(
+                title: 'Customers',
+                subtitle: 'Manage customer profiles and loan accounts',
               ),
               const SizedBox(height: 16),
               Row(
@@ -269,10 +377,12 @@ class _CustomersScreenState extends State<CustomersScreen> {
                   ElevatedButton.icon(
                     onPressed: () => _showCustomerFormModal(),
                     icon: const Icon(Icons.person_add_alt_1_outlined, size: 18),
-                    label: Text(l10n.customersAddButton),
+                    label: const Text('Add Customer'),
                   ),
                 ],
               ),
+              const SizedBox(height: 16),
+              _buildStatsRow(isNarrow),
               const SizedBox(height: 24),
               Container(
                 padding: const EdgeInsets.all(16),
@@ -286,9 +396,9 @@ class _CustomersScreenState extends State<CustomersScreen> {
                   children: [
                     TextField(
                       onChanged: (v) => setState(() => _query = v),
-                      decoration: InputDecoration(
-                        hintText: l10n.customersSearchHint,
-                        prefixIcon: const Icon(Icons.search),
+                      decoration: const InputDecoration(
+                        hintText: 'Search by name...',
+                        prefixIcon: Icon(Icons.search),
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -309,14 +419,15 @@ class _CustomersScreenState extends State<CustomersScreen> {
                           items: ['All Status', 'Active', 'Overdue', 'Inactive']
                               .map((s) => DropdownMenuItem(
                                     value: s,
-                                    child: Text(_filterDisplayLabel(s, l10n),
+                                    child: Text(s,
                                         style: const TextStyle(
                                             color: AppColors.kTextDark)),
                                   ))
                               .toList(),
                           onChanged: (val) {
-                            if (val != null)
+                            if (val != null) {
                               setState(() => _statusFilter = val);
+                            }
                           },
                         ),
                       ),
@@ -341,15 +452,15 @@ class _CustomersScreenState extends State<CustomersScreen> {
                         const SizedBox(height: 12),
                         OutlinedButton(
                             onPressed: _loadCustomers,
-                            child: Text(l10n.retry)),
+                            child: const Text('Retry')),
                       ],
                     ),
                   ),
                 )
               else if (filtered.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 48),
-                  child: Center(child: Text(l10n.customersNoResults)),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 48),
+                  child: Center(child: Text('No customers found')),
                 )
               else
                 ListView.separated(
@@ -363,9 +474,10 @@ class _CustomersScreenState extends State<CustomersScreen> {
                     return _CustomerCard(
                       customer: c,
                       statusLabel: _statusLabel(c.loanStatus),
+                      agents: _agents,
                       onView: () => _viewCustomer(c),
                       onEdit: () => _showCustomerFormModal(existingCustomer: c),
-                      onDelete: () => _deleteCustomer(c),
+                      onDelete: _isAgent ? null : () => _deleteCustomer(c),
                     );
                   },
                 ),
@@ -383,11 +495,25 @@ class _CustomersScreenState extends State<CustomersScreen> {
 
 class _CustomerViewSheet extends StatelessWidget {
   final Customer customer;
-  const _CustomerViewSheet({required this.customer});
+  final List<AgentOption> agents;
+  const _CustomerViewSheet({required this.customer, this.agents = const []});
+
+  /// The customer's assigned-agent id resolved to a display name. The
+  /// customers list endpoint only returns the raw `assigned_agent` uuid, so
+  /// this looks the name up from the agents already loaded for the assign
+  /// form, falling back to whatever the API did provide.
+  String? get _assignedAgentLabel {
+    final id = customer.assignedAgent;
+    if (id != null && id.isNotEmpty) {
+      for (final a in agents) {
+        if (a.id == id) return a.fullName;
+      }
+    }
+    return customer.assignedAgentName ?? customer.assignedAgent;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
       child: Column(
@@ -397,12 +523,14 @@ class _CustomerViewSheet extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                customer.fullName,
-                style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.kTextDark),
+              Expanded(
+                child: Text(
+                  customer.fullName,
+                  style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.kTextDark),
+                ),
               ),
               IconButton(
                 padding: EdgeInsets.zero,
@@ -413,16 +541,19 @@ class _CustomerViewSheet extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 24),
-          _buildViewField(l10n.customerFieldId, customer.customerId),
-          _buildViewField(l10n.customerFieldMobile, customer.mobile),
-          _buildViewField(l10n.customerFieldAddress, customer.address),
-          _buildViewField(l10n.customerFieldAadhaar, customer.aadhaar),
-          _buildViewField(l10n.customerFieldPan, customer.pan),
-          _buildViewField(l10n.customerFieldOccupation, customer.occupation),
-          _buildViewField(l10n.customerFieldAgent,
-              customer.assignedAgentName ?? customer.assignedAgent),
-          _buildViewField(l10n.customerFieldLoanStatus, customer.loanStatus),
+          _buildViewField('Customer ID', customer.customerId),
+          _buildViewField('Mobile Number', customer.mobile),
+          _buildViewField('Address', customer.address),
+          _buildViewField('Aadhaar Number', customer.aadhaar),
+          _buildViewField('PAN Number', customer.pan),
+          _buildViewField('Occupation', customer.occupation),
+          _buildViewField('Assigned Agent', _assignedAgentLabel),
+          _buildViewField('Loan Status', customer.loanStatus),
           const SizedBox(height: 8),
+          _sectionLabel(Icons.image_outlined, 'Documents & Photos'),
+          const SizedBox(height: 12),
+          _buildDocumentsGrid(context),
+          const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,
             child: OutlinedButton(
@@ -432,13 +563,65 @@ class _CustomerViewSheet extends StatelessWidget {
                     borderRadius: BorderRadius.circular(14)),
               ),
               onPressed: () => Navigator.pop(context),
-              child: Text(l10n.customerViewClose,
-                  style: const TextStyle(fontWeight: FontWeight.w600)),
+              child: const Text('Close',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
             ),
           ),
         ],
       ),
     );
+  }
+
+  Widget _sectionLabel(IconData icon, String label) {
+    return Row(
+      children: [
+        Icon(icon, size: 15, color: AppColors.kGoldDark),
+        const SizedBox(width: 8),
+        Text(
+          label.toUpperCase(),
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            color: AppColors.kGoldDark,
+            letterSpacing: 0.4,
+          ),
+        ),
+        const SizedBox(width: 10),
+        const Expanded(child: Divider(color: AppColors.kBorder, height: 1)),
+      ],
+    );
+  }
+
+  Widget _buildDocumentsGrid(BuildContext context) {
+    final docs = <_DocEntry>[
+      _DocEntry('Profile Photo', Icons.person_outline, customer.photoUrl),
+      _DocEntry(
+          'Aadhaar Front', Icons.badge_outlined, customer.aadhaarFrontUrl),
+      _DocEntry(
+          'Aadhaar Back', Icons.badge_outlined, customer.aadhaarBackUrl),
+      _DocEntry('PAN Card', Icons.credit_card_outlined, customer.panUrl),
+      _DocEntry('Signature', Icons.draw_outlined, customer.signatureUrl),
+    ];
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final isNarrow = constraints.maxWidth < 420;
+      return GridView.count(
+        crossAxisCount: isNarrow ? 2 : 5,
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        mainAxisSpacing: 12,
+        crossAxisSpacing: 12,
+        childAspectRatio: 0.85,
+        children: docs
+            .map((d) => _DocThumbCard(
+                  entry: d,
+                  onTap: d.hasImage
+                      ? () => openImageViewer(context, d.data, d.label)
+                      : null,
+                ))
+            .toList(),
+      );
+    });
   }
 
   Widget _buildViewField(String label, String? value) {
@@ -471,6 +654,102 @@ class _CustomerViewSheet extends StatelessWidget {
   }
 }
 
+class _DocEntry {
+  final String label;
+  final IconData icon;
+  final String? data;
+  _DocEntry(this.label, this.icon, this.data);
+  bool get hasImage => data != null && data!.isNotEmpty;
+}
+
+class _DocThumbCard extends StatelessWidget {
+  final _DocEntry entry;
+  final VoidCallback? onTap;
+  const _DocThumbCard({required this.entry, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Container(
+          decoration: BoxDecoration(
+            color: AppColors.kBackground,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.kBorder),
+          ),
+          child: Column(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(14)),
+                  child: entry.hasImage
+                      ? Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            DocumentImage(data: entry.data, fit: BoxFit.cover),
+                            Positioned(
+                              right: 4,
+                              bottom: 4,
+                              child: Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: const BoxDecoration(
+                                  color: Colors.black54,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.zoom_in,
+                                    size: 14, color: Colors.white),
+                              ),
+                            ),
+                          ],
+                        )
+                      : Container(
+                          color: AppColors.kBorder.withOpacity(0.3),
+                          child: Center(
+                            child: Icon(entry.icon,
+                                size: 26, color: AppColors.kTextMuted),
+                          ),
+                        ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 6, vertical: 8),
+                child: Column(
+                  children: [
+                    Text(
+                      entry.label,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.kTextDark),
+                    ),
+                    if (!entry.hasImage)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 2),
+                        child: Text(
+                          'Not uploaded',
+                          style: TextStyle(
+                              fontSize: 10, color: AppColors.kTextMuted),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ---------------------------------------------------------
 // CUSTOMER CARD
 // ---------------------------------------------------------
@@ -478,17 +757,32 @@ class _CustomerViewSheet extends StatelessWidget {
 class _CustomerCard extends StatelessWidget {
   final Customer customer;
   final String statusLabel;
+  final List<AgentOption> agents;
   final VoidCallback onView;
   final VoidCallback onEdit;
-  final VoidCallback onDelete;
+  final VoidCallback? onDelete;
 
   const _CustomerCard({
     required this.customer,
     required this.statusLabel,
+    this.agents = const [],
     required this.onView,
     required this.onEdit,
-    required this.onDelete,
+    this.onDelete,
   });
+
+  /// See _CustomerViewSheet._assignedAgentLabel: the customers list endpoint
+  /// only returns the raw `assigned_agent` uuid, so resolve it against the
+  /// agents already loaded for the assign form.
+  String? get _assignedAgentLabel {
+    final id = customer.assignedAgent;
+    if (id != null && id.isNotEmpty) {
+      for (final a in agents) {
+        if (a.id == id) return a.fullName;
+      }
+    }
+    return customer.assignedAgentName ?? customer.assignedAgent;
+  }
 
   String _getInitials(String name) {
     final parts = name.trim().split(' ');
@@ -502,22 +796,13 @@ class _CustomerCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
     final isActive = statusLabel == 'Active';
     final badgeColor = isActive
         ? AppColors.kSuccess.withOpacity(0.1)
         : AppColors.kDanger.withOpacity(0.1);
     final badgeTextColor = isActive ? AppColors.kSuccess : AppColors.kDanger;
 
-    // Display-only localization of the status badge; internal comparisons
-    // above still use the English constant returned by _statusLabel.
-    final displayStatusLabel = statusLabel == 'Active'
-        ? l10n.customersFilterActive
-        : statusLabel == 'Overdue'
-            ? l10n.customersFilterOverdue
-            : statusLabel == 'Inactive'
-                ? l10n.customersFilterInactive
-                : statusLabel;
+    final photoBytes = decodePhotoBytes(customer.photoUrl);
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -534,13 +819,17 @@ class _CustomerCard extends StatelessWidget {
               CircleAvatar(
                 radius: 24,
                 backgroundColor: AppColors.kGold,
-                child: Text(
-                  _getInitials(customer.fullName),
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 18),
-                ),
+                backgroundImage:
+                    photoBytes != null ? MemoryImage(photoBytes) : null,
+                child: photoBytes == null
+                    ? Text(
+                        _getInitials(customer.fullName),
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18),
+                      )
+                    : null,
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -564,7 +853,7 @@ class _CustomerCard extends StatelessWidget {
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
                     color: badgeColor, borderRadius: BorderRadius.circular(12)),
-                child: Text(displayStatusLabel,
+                child: Text(statusLabel,
                     style: TextStyle(
                         color: badgeTextColor,
                         fontSize: 12,
@@ -595,9 +884,7 @@ class _CustomerCard extends StatelessWidget {
               Expanded(
                   child: _DetailItem(
                       icon: Icons.business_center_outlined,
-                      text: customer.assignedAgentName ??
-                          customer.assignedAgent ??
-                          l10n.customerUnassigned)),
+                      text: _assignedAgentLabel ?? 'Unassigned')),
             ],
           ),
           const SizedBox(height: 20),
@@ -608,19 +895,20 @@ class _CustomerCard extends StatelessWidget {
             children: [
               _ActionButton(
                   icon: Icons.visibility_outlined,
-                  label: l10n.customerActionView,
+                  label: 'View',
                   color: AppColors.kInfo,
                   onTap: onView),
               _ActionButton(
                   icon: Icons.edit_outlined,
-                  label: l10n.customerActionEdit,
+                  label: 'Edit',
                   color: AppColors.kGoldDark,
                   onTap: onEdit),
-              _ActionButton(
-                  icon: Icons.delete_outline,
-                  label: l10n.customerActionDelete,
-                  color: AppColors.kDanger,
-                  onTap: onDelete),
+              if (onDelete != null)
+                _ActionButton(
+                    icon: Icons.delete_outline,
+                    label: 'Delete',
+                    color: AppColors.kDanger,
+                    onTap: onDelete!),
             ],
           ),
         ],
@@ -691,7 +979,7 @@ class _ActionButton extends StatelessWidget {
 
 // ---------------------------------------------------------
 // CUSTOMER FORM (ADD & EDIT) — validated, stylish, responsive
-// Portal login now uses the customer's MOBILE NUMBER + PASSWORD.
+// Portal login uses the customer's MOBILE NUMBER + PASSWORD.
 // No email/Gmail field is required anywhere in this form.
 // ---------------------------------------------------------
 
@@ -727,7 +1015,14 @@ class _CustomerFormState extends State<_CustomerForm> {
   late TextEditingController _lngCtrl;
 
   String? _assignedAgentId;
-  String? _photoDataUri;
+
+  // Photo / document state
+  String? _profilePhoto;
+  String? _aadhaarFrontPhoto;
+  String? _aadhaarBackPhoto;
+  String? _panPhoto;
+  String? _signaturePhoto;
+
   bool _locationBusy = false;
   bool _obscurePassword = true;
 
@@ -746,7 +1041,11 @@ class _CustomerFormState extends State<_CustomerForm> {
     _latCtrl = TextEditingController(text: d?.latitude?.toString() ?? '');
     _lngCtrl = TextEditingController(text: d?.longitude?.toString() ?? '');
     _assignedAgentId = d?.assignedAgent;
-    _photoDataUri = d?.photoUrl;
+    _profilePhoto = d?.photoUrl;
+    _aadhaarFrontPhoto = d?.aadhaarFrontUrl;
+    _aadhaarBackPhoto = d?.aadhaarBackUrl;
+    _panPhoto = d?.panUrl;
+    _signaturePhoto = d?.signatureUrl;
   }
 
   @override
@@ -765,11 +1064,10 @@ class _CustomerFormState extends State<_CustomerForm> {
   }
 
   Future<void> _pinFromAddress() async {
-    final l10n = AppLocalizations.of(context);
     if (_addressCtrl.text.trim().isEmpty) {
       ToastService.show(
-        title: l10n.customerAddressRequiredTitle,
-        message: l10n.customerAddressRequiredMessage,
+        title: 'Address Required',
+        message: 'Please enter an address first.',
         type: ToastType.error,
       );
       return;
@@ -783,7 +1081,7 @@ class _CustomerFormState extends State<_CustomerForm> {
       });
     } catch (e) {
       ToastService.show(
-          title: l10n.customerAddressNotFoundTitle,
+          title: 'Address Not Found',
           message: e.toString(),
           type: ToastType.error);
     } finally {
@@ -792,7 +1090,6 @@ class _CustomerFormState extends State<_CustomerForm> {
   }
 
   Future<void> _useMyGps() async {
-    final l10n = AppLocalizations.of(context);
     setState(() => _locationBusy = true);
     try {
       final result = await _locationService.getCurrentPosition();
@@ -802,7 +1099,7 @@ class _CustomerFormState extends State<_CustomerForm> {
       });
     } catch (e) {
       ToastService.show(
-          title: l10n.customerLocationFailedTitle,
+          title: 'Location Failed',
           message: e.toString(),
           type: ToastType.error);
     } finally {
@@ -810,113 +1107,150 @@ class _CustomerFormState extends State<_CustomerForm> {
     }
   }
 
-  Future<void> _pickPhoto() async {
-    final l10n = AppLocalizations.of(context);
+  Future<void> _pickPhotoFor(_PhotoSlot slot) async {
     try {
       final dataUri = await _photoService.pickPhotoAsDataUri();
-      if (dataUri != null) setState(() => _photoDataUri = dataUri);
+      if (dataUri == null) return;
+      setState(() {
+        switch (slot) {
+          case _PhotoSlot.profile:
+            _profilePhoto = dataUri;
+            break;
+          case _PhotoSlot.aadhaarFront:
+            _aadhaarFrontPhoto = dataUri;
+            break;
+          case _PhotoSlot.aadhaarBack:
+            _aadhaarBackPhoto = dataUri;
+            break;
+          case _PhotoSlot.pan:
+            _panPhoto = dataUri;
+            break;
+          case _PhotoSlot.signature:
+            _signaturePhoto = dataUri;
+            break;
+        }
+      });
     } catch (e) {
       ToastService.show(
-          title: l10n.customerPhotoFailedTitle,
+          title: 'Photo Upload Failed',
           message: e.toString(),
           type: ToastType.error);
     }
   }
 
+  void _removePhoto(_PhotoSlot slot) {
+    setState(() {
+      switch (slot) {
+        case _PhotoSlot.profile:
+          _profilePhoto = null;
+          break;
+        case _PhotoSlot.aadhaarFront:
+          _aadhaarFrontPhoto = null;
+          break;
+        case _PhotoSlot.aadhaarBack:
+          _aadhaarBackPhoto = null;
+          break;
+        case _PhotoSlot.pan:
+          _panPhoto = null;
+          break;
+        case _PhotoSlot.signature:
+          _signaturePhoto = null;
+          break;
+      }
+    });
+  }
+
   // ---- Validators ----
-  // Each takes an AppLocalizations instance so messages stay localized.
 
-  String? _validateName(String? v, AppLocalizations l10n) {
+  String? _validateName(String? v) {
     final value = v?.trim() ?? '';
-    if (value.isEmpty) return l10n.customerValidatorNameRequired;
-    if (value.length < 3) return l10n.customerValidatorNameMin;
-    if (!RegExp(r'^[a-zA-Z .]+$').hasMatch(value)) {
-      return l10n.customerValidatorNameChars;
-    }
+    if (value.isEmpty) return 'Full name is required';
     return null;
   }
 
-  String? _validateMobile(String? v, AppLocalizations l10n) {
+  String? _validateMobile(String? v) {
     final value = v?.trim() ?? '';
-    if (value.isEmpty) return l10n.customerValidatorMobileRequired;
+    if (value.isEmpty) return 'Mobile number is required';
     if (!RegExp(r'^[6-9]\d{9}$').hasMatch(value)) {
-      return l10n.customerValidatorMobileInvalid;
+      return 'Enter a valid 10-digit mobile number';
     }
     return null;
   }
 
-  String? _validateAddress(String? v, AppLocalizations l10n) {
+  String? _validateAddress(String? v) {
     final value = v?.trim() ?? '';
-    if (value.isEmpty) return l10n.customerValidatorAddressRequired;
-    if (value.length < 5) return l10n.customerValidatorAddressMin;
+    if (value.isEmpty) return 'Address is required';
+    if (value.length < 5) return 'Address must be at least 5 characters';
     return null;
   }
 
-  String? _validateAadhaar(String? v, AppLocalizations l10n) {
+  String? _validateAadhaar(String? v) {
     final value = v?.trim() ?? '';
     if (value.isEmpty) return null; // optional
     if (!RegExp(r'^\d{12}$').hasMatch(value)) {
-      return l10n.customerValidatorAadhaarInvalid;
+      return 'Aadhaar number must be 12 digits';
     }
     return null;
   }
 
-  String? _validatePan(String? v, AppLocalizations l10n) {
+  String? _validatePan(String? v) {
     final value = v?.trim().toUpperCase() ?? '';
     if (value.isEmpty) return null; // optional
     if (!RegExp(r'^[A-Z]{5}[0-9]{4}[A-Z]{1}$').hasMatch(value)) {
-      return l10n.customerValidatorPanInvalid;
+      return 'Enter a valid PAN (e.g. ABCDE1234F)';
     }
     return null;
   }
 
-  String? _validateOccupation(String? v, AppLocalizations l10n) {
+  String? _validateOccupation(String? v) {
     final value = v?.trim() ?? '';
     if (value.isNotEmpty && value.length < 2) {
-      return l10n.customerValidatorOccupationInvalid;
+      return 'Occupation must be at least 2 characters';
     }
     return null;
   }
 
-  String? _validateLatitude(String? v, AppLocalizations l10n) {
+  String? _validateLatitude(String? v) {
     final value = v?.trim() ?? '';
     if (value.isEmpty) return null; // optional
     final parsed = double.tryParse(value);
-    if (parsed == null) return l10n.customerValidatorNumberInvalid;
-    if (parsed < -90 || parsed > 90) return l10n.customerValidatorLatRange;
+    if (parsed == null) return 'Enter a valid number';
+    if (parsed < -90 || parsed > 90) return 'Latitude must be between -90 and 90';
     return null;
   }
 
-  String? _validateLongitude(String? v, AppLocalizations l10n) {
+  String? _validateLongitude(String? v) {
     final value = v?.trim() ?? '';
     if (value.isEmpty) return null; // optional
     final parsed = double.tryParse(value);
-    if (parsed == null) return l10n.customerValidatorNumberInvalid;
-    if (parsed < -180 || parsed > 180) return l10n.customerValidatorLngRange;
+    if (parsed == null) return 'Enter a valid number';
+    if (parsed < -180 || parsed > 180) {
+      return 'Longitude must be between -180 and 180';
+    }
     return null;
   }
 
-  String? _validateEmail(String? v, AppLocalizations l10n) {
+  String? _validateEmail(String? v) {
     final value = v?.trim() ?? '';
     if (value.isEmpty) return null; // optional
     final ok = RegExp(r'^[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}$').hasMatch(value);
-    if (!ok) return l10n.customerValidatorEmailInvalid;
+    if (!ok) return 'Enter a valid email address';
     return null;
   }
 
-  String? _validatePassword(String? v, AppLocalizations l10n) {
+  String? _validatePassword(String? v) {
     final value = v ?? '';
     if (value.isEmpty) return null; // optional unless portal login is configured
-    if (value.length < 6) return l10n.customerValidatorPasswordMin;
+    if (value.length < 6) return 'Password must be at least 6 characters';
     return null;
   }
 
-  void _handleSave(AppLocalizations l10n) {
+  void _handleSave() {
     final isValid = _formKey.currentState?.validate() ?? false;
     if (!isValid) {
       ToastService.show(
-        title: l10n.customerFormValidationTitle,
-        message: l10n.customerFormValidationMessage,
+        title: 'Validation Error',
+        message: 'Please fix the errors in the form.',
         type: ToastType.error,
       );
       return;
@@ -933,7 +1267,11 @@ class _CustomerFormState extends State<_CustomerForm> {
       aadhaar: _aadhaarCtrl.text.trim(),
       pan: _panCtrl.text.trim().toUpperCase(),
       occupation: _occupationCtrl.text.trim(),
-      photoUrl: _photoDataUri,
+      photoUrl: _profilePhoto,
+      aadhaarFrontUrl: _aadhaarFrontPhoto,
+      aadhaarBackUrl: _aadhaarBackPhoto,
+      panUrl: _panPhoto,
+      signatureUrl: _signaturePhoto,
       assignedAgent: _assignedAgentId,
       latitude: double.tryParse(_latCtrl.text.trim()),
       longitude: double.tryParse(_lngCtrl.text.trim()),
@@ -945,11 +1283,7 @@ class _CustomerFormState extends State<_CustomerForm> {
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
     final isEditing = widget.initialData != null;
-    final initials = _nameCtrl.text.trim().isNotEmpty
-        ? _nameCtrl.text.trim()[0].toUpperCase()
-        : 'C';
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -966,12 +1300,6 @@ class _CustomerFormState extends State<_CustomerForm> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // ---- Header ----
-                Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -980,7 +1308,7 @@ class _CustomerFormState extends State<_CustomerForm> {
                         Container(
                           padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
-                            gradient: LinearGradient(
+                            gradient: const LinearGradient(
                               colors: [AppColors.kGold, AppColors.kGoldDark],
                               begin: Alignment.topLeft,
                               end: Alignment.bottomRight,
@@ -1007,9 +1335,7 @@ class _CustomerFormState extends State<_CustomerForm> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              isEditing
-                                  ? l10n.customerFormEditTitle
-                                  : l10n.customerFormAddTitle,
+                              isEditing ? 'Edit Customer' : 'Add New Customer',
                               style: const TextStyle(
                                   fontSize: 19,
                                   fontWeight: FontWeight.bold,
@@ -1017,8 +1343,8 @@ class _CustomerFormState extends State<_CustomerForm> {
                             ),
                             Text(
                               isEditing
-                                  ? l10n.customerFormEditSubtitle
-                                  : l10n.customerFormAddSubtitle,
+                                  ? 'Update customer details'
+                                  : 'Enter customer details below',
                               style: const TextStyle(
                                   fontSize: 12, color: AppColors.kTextMuted),
                             ),
@@ -1037,22 +1363,22 @@ class _CustomerFormState extends State<_CustomerForm> {
                 ),
                 const SizedBox(height: 24),
 
-                _sectionLabel(Icons.badge_outlined, l10n.customerSectionPersonal),
+                _sectionLabel(Icons.badge_outlined, 'Personal Details'),
                 const SizedBox(height: 12),
 
                 _buildInputField(
-                  l10n.customerLabelFullName,
-                  l10n.customerHintFullName,
+                  'Full Name',
+                  'Enter full name',
                   _nameCtrl,
-                  validator: (v) => _validateName(v, l10n),
+                  validator: _validateName,
                   prefixIcon: Icons.person_outline,
                   textCapitalization: TextCapitalization.words,
                 ),
                 _buildInputField(
-                  l10n.customerLabelMobile,
-                  l10n.customerHintMobile,
+                  'Mobile Number',
+                  '10-digit mobile number',
                   _mobileCtrl,
-                  validator: (v) => _validateMobile(v, l10n),
+                  validator: _validateMobile,
                   prefixIcon: Icons.phone_outlined,
                   keyboardType: TextInputType.phone,
                   inputFormatters: [
@@ -1061,10 +1387,10 @@ class _CustomerFormState extends State<_CustomerForm> {
                   ],
                 ),
                 _buildInputField(
-                  l10n.customerLabelAddress,
-                  l10n.customerHintAddress,
+                  'Address',
+                  'Enter full address',
                   _addressCtrl,
-                  validator: (v) => _validateAddress(v, l10n),
+                  validator: _validateAddress,
                   prefixIcon: Icons.location_on_outlined,
                   maxLines: 3,
                 ),
@@ -1073,10 +1399,10 @@ class _CustomerFormState extends State<_CustomerForm> {
                     ? Column(
                         children: [
                           _buildInputField(
-                            l10n.customerLabelAadhaar,
-                            l10n.customerHintAadhaar,
+                            'Aadhaar Number',
+                            '12-digit Aadhaar number',
                             _aadhaarCtrl,
-                            validator: (v) => _validateAadhaar(v, l10n),
+                            validator: _validateAadhaar,
                             prefixIcon: Icons.credit_card_outlined,
                             keyboardType: TextInputType.number,
                             inputFormatters: [
@@ -1085,10 +1411,10 @@ class _CustomerFormState extends State<_CustomerForm> {
                             ],
                           ),
                           _buildInputField(
-                            l10n.customerLabelPan,
-                            l10n.customerHintPan,
+                            'PAN Number',
+                            'e.g. ABCDE1234F',
                             _panCtrl,
-                            validator: (v) => _validatePan(v, l10n),
+                            validator: _validatePan,
                             prefixIcon: Icons.badge_outlined,
                             textCapitalization: TextCapitalization.characters,
                             inputFormatters: [
@@ -1102,10 +1428,10 @@ class _CustomerFormState extends State<_CustomerForm> {
                         children: [
                           Expanded(
                             child: _buildInputField(
-                              l10n.customerLabelAadhaar,
-                              l10n.customerHintAadhaar,
+                              'Aadhaar Number',
+                              '12-digit Aadhaar number',
                               _aadhaarCtrl,
-                              validator: (v) => _validateAadhaar(v, l10n),
+                              validator: _validateAadhaar,
                               prefixIcon: Icons.credit_card_outlined,
                               keyboardType: TextInputType.number,
                               inputFormatters: [
@@ -1117,10 +1443,10 @@ class _CustomerFormState extends State<_CustomerForm> {
                           const SizedBox(width: 12),
                           Expanded(
                             child: _buildInputField(
-                              l10n.customerLabelPan,
-                              l10n.customerHintPan,
+                              'PAN Number',
+                              'e.g. ABCDE1234F',
                               _panCtrl,
-                              validator: (v) => _validatePan(v, l10n),
+                              validator: _validatePan,
                               prefixIcon: Icons.badge_outlined,
                               textCapitalization: TextCapitalization.characters,
                               inputFormatters: [
@@ -1132,16 +1458,17 @@ class _CustomerFormState extends State<_CustomerForm> {
                       ),
 
                 _buildInputField(
-                  l10n.customerLabelOccupation,
-                  l10n.customerHintOccupation,
+                  'Occupation',
+                  'Enter occupation',
                   _occupationCtrl,
-                  validator: (v) => _validateOccupation(v, l10n),
+                  validator: _validateOccupation,
                   prefixIcon: Icons.work_outline,
                   textCapitalization: TextCapitalization.sentences,
                 ),
 
                 const SizedBox(height: 4),
-                _sectionLabel(Icons.groups_outlined, l10n.customerSectionAssignment),
+                _sectionLabel(
+                    Icons.groups_outlined, 'Assignment & Location'),
                 const SizedBox(height: 12),
 
                 // ASSIGNED AGENT
@@ -1150,8 +1477,8 @@ class _CustomerFormState extends State<_CustomerForm> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(l10n.customerLabelAssignedAgent,
-                          style: const TextStyle(
+                      const Text('Assigned Agent',
+                          style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w600,
                               color: AppColors.kTextMuted)),
@@ -1167,13 +1494,13 @@ class _CustomerFormState extends State<_CustomerForm> {
                           child: DropdownButton<String?>(
                             isExpanded: true,
                             value: _assignedAgentId,
-                            hint: Text(l10n.customerUnassigned,
-                                style: const TextStyle(color: AppColors.kTextMuted)),
+                            hint: const Text('Unassigned',
+                                style: TextStyle(color: AppColors.kTextMuted)),
                             icon: const Icon(Icons.unfold_more,
                                 size: 20, color: AppColors.kTextMuted),
                             items: [
-                              DropdownMenuItem<String?>(
-                                  value: null, child: Text(l10n.customerUnassigned)),
+                              const DropdownMenuItem<String?>(
+                                  value: null, child: Text('Unassigned')),
                               ...widget.agents
                                   .map((a) => DropdownMenuItem<String?>(
                                         value: a.id,
@@ -1204,20 +1531,21 @@ class _CustomerFormState extends State<_CustomerForm> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
+                      const Row(
                         children: [
-                          const Icon(Icons.map_outlined,
+                          Icon(Icons.map_outlined,
                               size: 18, color: AppColors.kGoldDark),
-                          const SizedBox(width: 8),
-                          Text(l10n.customerMapLocationTitle,
-                              style: const TextStyle(
+                          SizedBox(width: 8),
+                          Text('Map Location',
+                              style: TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.bold,
                                   color: AppColors.kTextDark)),
                         ],
                       ),
-                      Text(l10n.customerMapLocationSubtitle,
-                          style: const TextStyle(
+                      const Text(
+                          "Pin the customer's location for field visits",
+                          style: TextStyle(
                               fontSize: 12, color: AppColors.kTextMuted)),
                       const SizedBox(height: 12),
                       isNarrow
@@ -1230,7 +1558,7 @@ class _CustomerFormState extends State<_CustomerForm> {
                                         _locationBusy ? null : _pinFromAddress,
                                     icon: const Icon(Icons.location_searching,
                                         size: 16),
-                                    label: Text(l10n.customerPinFromAddress),
+                                    label: const Text('Pin from Address'),
                                   ),
                                 ),
                                 const SizedBox(height: 10),
@@ -1239,7 +1567,7 @@ class _CustomerFormState extends State<_CustomerForm> {
                                   child: OutlinedButton.icon(
                                     onPressed: _locationBusy ? null : _useMyGps,
                                     icon: const Icon(Icons.gps_fixed, size: 16),
-                                    label: Text(l10n.customerUseMyGps),
+                                    label: const Text('Use My GPS'),
                                   ),
                                 ),
                               ],
@@ -1252,7 +1580,7 @@ class _CustomerFormState extends State<_CustomerForm> {
                                         _locationBusy ? null : _pinFromAddress,
                                     icon: const Icon(Icons.location_searching,
                                         size: 16),
-                                    label: Text(l10n.customerPinFromAddress),
+                                    label: const Text('Pin from Address'),
                                   ),
                                 ),
                                 const SizedBox(width: 12),
@@ -1260,7 +1588,7 @@ class _CustomerFormState extends State<_CustomerForm> {
                                   child: OutlinedButton.icon(
                                     onPressed: _locationBusy ? null : _useMyGps,
                                     icon: const Icon(Icons.gps_fixed, size: 16),
-                                    label: Text(l10n.customerUseMyGps),
+                                    label: const Text('Use My GPS'),
                                   ),
                                 ),
                               ],
@@ -1275,18 +1603,18 @@ class _CustomerFormState extends State<_CustomerForm> {
                           ? Column(
                               children: [
                                 _buildInputField(
-                                    l10n.customerLatLngHint,
-                                    l10n.customerLatitudeLabel,
+                                    'Latitude',
+                                    'Enter latitude',
                                     _latCtrl,
-                                    validator: (v) => _validateLatitude(v, l10n),
+                                    validator: _validateLatitude,
                                     keyboardType:
                                         const TextInputType.numberWithOptions(
                                             decimal: true, signed: true)),
                                 _buildInputField(
-                                    l10n.customerLatLngHint,
-                                    l10n.customerLongitudeLabel,
+                                    'Longitude',
+                                    'Enter longitude',
                                     _lngCtrl,
-                                    validator: (v) => _validateLongitude(v, l10n),
+                                    validator: _validateLongitude,
                                     keyboardType:
                                         const TextInputType.numberWithOptions(
                                             decimal: true, signed: true)),
@@ -1297,30 +1625,28 @@ class _CustomerFormState extends State<_CustomerForm> {
                               children: [
                                 Expanded(
                                     child: _buildInputField(
-                                        l10n.customerLatLngHint,
-                                        l10n.customerLatitudeLabel,
+                                        'Latitude',
+                                        'Enter latitude',
                                         _latCtrl,
-                                        validator: (v) =>
-                                            _validateLatitude(v, l10n),
+                                        validator: _validateLatitude,
                                         keyboardType: const TextInputType
                                             .numberWithOptions(
                                             decimal: true, signed: true))),
                                 const SizedBox(width: 12),
                                 Expanded(
                                     child: _buildInputField(
-                                        l10n.customerLatLngHint,
-                                        l10n.customerLongitudeLabel,
+                                        'Longitude',
+                                        'Enter longitude',
                                         _lngCtrl,
-                                        validator: (v) =>
-                                            _validateLongitude(v, l10n),
+                                        validator: _validateLongitude,
                                         keyboardType: const TextInputType
                                             .numberWithOptions(
                                             decimal: true, signed: true))),
                               ],
                             ),
-                      Text(
-                        l10n.customerMapHelpText,
-                        style: const TextStyle(
+                      const Text(
+                        "This helps agents navigate to the customer's location during field visits.",
+                        style: TextStyle(
                             fontSize: 12,
                             color: AppColors.kTextMuted,
                             height: 1.4),
@@ -1329,8 +1655,7 @@ class _CustomerFormState extends State<_CustomerForm> {
                   ),
                 ),
 
-                _sectionLabel(
-                    Icons.lock_outline, l10n.customerSectionPortalLogin),
+                _sectionLabel(Icons.lock_outline, 'Portal Login'),
                 const SizedBox(height: 12),
 
                 // PORTAL LOGIN — mobile number + password (no email required)
@@ -1358,10 +1683,10 @@ class _CustomerFormState extends State<_CustomerForm> {
                                 size: 16, color: AppColors.kGoldDark),
                           ),
                           const SizedBox(width: 10),
-                          Expanded(
+                          const Expanded(
                             child: Text(
-                              l10n.customerPortalLoginHelp,
-                              style: const TextStyle(
+                              'Customer will use their mobile number and this password to log in to the portal.',
+                              style: TextStyle(
                                   fontSize: 12,
                                   color: AppColors.kTextMuted,
                                   height: 1.4),
@@ -1371,18 +1696,18 @@ class _CustomerFormState extends State<_CustomerForm> {
                       ),
                       const SizedBox(height: 14),
                       _buildInputField(
-                        l10n.customerLabelEmail,
-                        l10n.customerHintEmail,
+                        'Email (Optional)',
+                        'customer@example.com',
                         _emailCtrl,
-                        validator: (v) => _validateEmail(v, l10n),
+                        validator: _validateEmail,
                         prefixIcon: Icons.email_outlined,
                         keyboardType: TextInputType.emailAddress,
                       ),
                       _buildInputField(
-                        l10n.customerLabelPassword,
-                        l10n.customerHintPassword,
+                        'Password',
+                        'Leave blank to keep unchanged',
                         _passwordCtrl,
-                        validator: (v) => _validatePassword(v, l10n),
+                        validator: _validatePassword,
                         prefixIcon: Icons.key_outlined,
                         obscureText: _obscurePassword,
                         suffixIcon: IconButton(
@@ -1397,15 +1722,15 @@ class _CustomerFormState extends State<_CustomerForm> {
                               () => _obscurePassword = !_obscurePassword),
                         ),
                       ),
-                      Row(
+                      const Row(
                         children: [
-                          const Icon(Icons.info_outline,
+                          Icon(Icons.info_outline,
                               size: 14, color: AppColors.kTextMuted),
-                          const SizedBox(width: 6),
+                          SizedBox(width: 6),
                           Expanded(
                             child: Text(
-                              l10n.customerLoginNote,
-                              style: const TextStyle(
+                              "Password is optional. Leave blank if you don't want to set up portal access.",
+                              style: TextStyle(
                                   fontSize: 11, color: AppColors.kTextMuted),
                             ),
                           ),
@@ -1415,58 +1740,69 @@ class _CustomerFormState extends State<_CustomerForm> {
                   ),
                 ),
 
-                _sectionLabel(Icons.image_outlined, l10n.customerSectionPhoto),
+                _sectionLabel(Icons.image_outlined, 'Documents & Photos'),
                 const SizedBox(height: 12),
 
-                // CUSTOMER PHOTO
+                // DOCUMENTS & PHOTOS
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 28),
-                  child: Row(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: GridView.count(
+                    crossAxisCount: isNarrow ? 2 : 5,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: 0.78,
                     children: [
-                      Stack(
-                        children: [
-                          CircleAvatar(
-                            radius: 30,
-                            backgroundColor: AppColors.kGold,
-                            backgroundImage: _photoDataUri != null
-                                ? MemoryImage(_decodeDataUri(_photoDataUri!))
-                                : null,
-                            child: _photoDataUri == null
-                                ? Text(initials,
-                                    style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 20))
-                                : null,
-                          ),
-                          Positioned(
-                            bottom: 0,
-                            right: 0,
-                            child: Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                color: AppColors.kGoldDark,
-                                shape: BoxShape.circle,
-                                border:
-                                    Border.all(color: Colors.white, width: 2),
-                              ),
-                              child: const Icon(Icons.camera_alt_outlined,
-                                  size: 12, color: Colors.white),
-                            ),
-                          ),
-                        ],
+                      _PhotoUploadCard(
+                        label: 'Profile Photo',
+                        icon: Icons.person_outline,
+                        data: _profilePhoto,
+                        onPick: () => _pickPhotoFor(_PhotoSlot.profile),
+                        onRemove: () => _removePhoto(_PhotoSlot.profile),
+                        onPreview: () => openImageViewer(
+                            context, _profilePhoto, 'Profile Photo'),
                       ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _pickPhoto,
-                          icon: const Icon(Icons.upload_outlined, size: 16),
-                          label: Text(l10n.customerUploadPhoto),
-                        ),
+                      _PhotoUploadCard(
+                        label: 'Aadhaar Front',
+                        icon: Icons.badge_outlined,
+                        data: _aadhaarFrontPhoto,
+                        onPick: () => _pickPhotoFor(_PhotoSlot.aadhaarFront),
+                        onRemove: () => _removePhoto(_PhotoSlot.aadhaarFront),
+                        onPreview: () => openImageViewer(
+                            context, _aadhaarFrontPhoto, 'Aadhaar Front'),
+                      ),
+                      _PhotoUploadCard(
+                        label: 'Aadhaar Back',
+                        icon: Icons.badge_outlined,
+                        data: _aadhaarBackPhoto,
+                        onPick: () => _pickPhotoFor(_PhotoSlot.aadhaarBack),
+                        onRemove: () => _removePhoto(_PhotoSlot.aadhaarBack),
+                        onPreview: () => openImageViewer(
+                            context, _aadhaarBackPhoto, 'Aadhaar Back'),
+                      ),
+                      _PhotoUploadCard(
+                        label: 'PAN Card',
+                        icon: Icons.credit_card_outlined,
+                        data: _panPhoto,
+                        onPick: () => _pickPhotoFor(_PhotoSlot.pan),
+                        onRemove: () => _removePhoto(_PhotoSlot.pan),
+                        onPreview: () =>
+                            openImageViewer(context, _panPhoto, 'PAN Card'),
+                      ),
+                      _PhotoUploadCard(
+                        label: 'Signature',
+                        icon: Icons.draw_outlined,
+                        data: _signaturePhoto,
+                        onPick: () => _pickPhotoFor(_PhotoSlot.signature),
+                        onRemove: () => _removePhoto(_PhotoSlot.signature),
+                        onPreview: () => openImageViewer(
+                            context, _signaturePhoto, 'Signature'),
                       ),
                     ],
                   ),
                 ),
+                const SizedBox(height: 24),
 
                 isNarrow
                     ? Column(
@@ -1483,12 +1819,10 @@ class _CustomerFormState extends State<_CustomerForm> {
                                 shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(14)),
                               ),
-                              onPressed: () => _handleSave(l10n),
+                              onPressed: _handleSave,
                               icon: const Icon(Icons.save_outlined, size: 18),
                               label: Text(
-                                  isEditing
-                                      ? l10n.customerSaveChanges
-                                      : l10n.customersAddButton,
+                                  isEditing ? 'Save Changes' : 'Add Customer',
                                   style: const TextStyle(
                                       fontWeight: FontWeight.w600)),
                             ),
@@ -1504,8 +1838,8 @@ class _CustomerFormState extends State<_CustomerForm> {
                                     borderRadius: BorderRadius.circular(14)),
                               ),
                               onPressed: () => Navigator.pop(context),
-                              child: Text(l10n.cancel,
-                                  style: const TextStyle(
+                              child: const Text('Cancel',
+                                  style: TextStyle(
                                       fontWeight: FontWeight.w600)),
                             ),
                           ),
@@ -1522,8 +1856,8 @@ class _CustomerFormState extends State<_CustomerForm> {
                                     borderRadius: BorderRadius.circular(14)),
                               ),
                               onPressed: () => Navigator.pop(context),
-                              child: Text(l10n.cancel,
-                                  style: const TextStyle(
+                              child: const Text('Cancel',
+                                  style: TextStyle(
                                       fontWeight: FontWeight.w600)),
                             ),
                           ),
@@ -1539,12 +1873,10 @@ class _CustomerFormState extends State<_CustomerForm> {
                                 shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(14)),
                               ),
-                              onPressed: () => _handleSave(l10n),
+                              onPressed: _handleSave,
                               icon: const Icon(Icons.save_outlined, size: 18),
                               label: Text(
-                                  isEditing
-                                      ? l10n.customerSaveChanges
-                                      : l10n.customersAddButton,
+                                  isEditing ? 'Save Changes' : 'Add Customer',
                                   style: const TextStyle(
                                       fontWeight: FontWeight.w600)),
                             ),
@@ -1577,11 +1909,6 @@ class _CustomerFormState extends State<_CustomerForm> {
         const Expanded(child: Divider(color: AppColors.kBorder, height: 1)),
       ],
     );
-  }
-
-  Uint8List _decodeDataUri(String dataUri) {
-    final base64Part = dataUri.split(',').last;
-    return base64Decode(base64Part);
   }
 
   Widget _buildInputField(
@@ -1649,6 +1976,149 @@ class _CustomerFormState extends State<_CustomerForm> {
               ),
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+enum _PhotoSlot { profile, aadhaarFront, aadhaarBack, pan, signature }
+
+// ---------------------------------------------------------
+// Reusable upload card used in the form for each of the 4
+// photo/document slots. Tap the image to preview full-screen,
+// tap the camera badge to pick/replace, tap "Remove" to clear.
+// ---------------------------------------------------------
+
+class _PhotoUploadCard extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final String? data;
+  final VoidCallback onPick;
+  final VoidCallback onRemove;
+  final VoidCallback onPreview;
+
+  const _PhotoUploadCard({
+    required this.label,
+    required this.icon,
+    required this.data,
+    required this.onPick,
+    required this.onRemove,
+    required this.onPreview,
+  });
+
+  bool get _hasImage => data != null && data!.isNotEmpty;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.kBackground,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: GestureDetector(
+                    onTap: _hasImage ? onPreview : onPick,
+                    child: ClipRRect(
+                      borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(14)),
+                      child: _hasImage
+                          ? DocumentImage(data: data, fit: BoxFit.cover)
+                          : Container(
+                              color: AppColors.kBorder.withOpacity(0.25),
+                              child: Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(icon,
+                                        size: 24,
+                                        color: AppColors.kTextMuted),
+                                    const SizedBox(height: 4),
+                                    const Text(
+                                      'Tap to upload',
+                                      style: TextStyle(
+                                          fontSize: 10,
+                                          color: AppColors.kTextMuted),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 6,
+                  bottom: 6,
+                  child: GestureDetector(
+                    onTap: onPick,
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: AppColors.kGoldDark,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      child: const Icon(Icons.camera_alt_outlined,
+                          size: 14, color: Colors.white),
+                    ),
+                  ),
+                ),
+                if (_hasImage)
+                  Positioned(
+                    left: 6,
+                    top: 6,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: Colors.black54,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.zoom_in,
+                          size: 12, color: Colors.white),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+            child: Column(
+              children: [
+                Text(
+                  label,
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.kTextDark),
+                ),
+                if (_hasImage)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: GestureDetector(
+                      onTap: onRemove,
+                      child: const Text(
+                        'Remove',
+                        style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.kDanger),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ],

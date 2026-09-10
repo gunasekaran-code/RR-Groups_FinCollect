@@ -41,6 +41,12 @@ class ChitPaymentController extends ResourceController
             $this->scopeToOwnCustomer($claims);
         }
 
+        // An agent only sees the chit groups assigned to them, so the
+        // rows hanging off those groups are scoped the same way.
+        if ($method === 'GET') {
+            ChitScope::applyRead($this->model::table(), $role, $claims['sub'] ?? null);
+        }
+
         parent::handle();
     }
 

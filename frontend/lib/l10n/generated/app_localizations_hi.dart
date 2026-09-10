@@ -154,6 +154,18 @@ class AppLocalizationsHi extends AppLocalizations {
   String get customersFilterInactive => 'निष्क्रिय';
 
   @override
+  String get customersStatTotal => 'कुल ग्राहक';
+
+  @override
+  String get customersStatActive => 'सक्रिय ग्राहक';
+
+  @override
+  String get customersStatOverdue => 'अतिदेय ग्राहक';
+
+  @override
+  String get customersStatInactive => 'निष्क्रिय ग्राहक';
+
+  @override
   String get customersNoResults => 'कोई ग्राहक नहीं मिला';
 
   @override
@@ -1873,6 +1885,10 @@ class AppLocalizationsHi extends AppLocalizations {
   String get accountBreakdownChitPending => 'चिट लंबित';
 
   @override
+  String get accountBreakdownChitPendingNote =>
+      'भविष्य के सदस्य योगदान — इसे दिए गए ऋण में नहीं गिना जाता';
+
+  @override
   String get accountBreakdownFundPending => 'फंड लंबित';
 
   @override
@@ -1889,13 +1905,19 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get accountEmptyStateBody =>
-      'अपनी खाता बही को ट्रैक करना शुरू करने के लिए अपनी पहली नकद या उधार प्रविष्टि जोड़ें।';
+      'ऋण, साप्ताहिक फंड, चिट ग्रुप और कस्टम लेजर से सभी संग्रह यहां लाइव, रीयल-टाइम में दिखाई देंगे।';
 
   @override
   String get accountColDate => 'दिनांक';
 
   @override
   String get accountColTitle => 'शीर्षक';
+
+  @override
+  String get accountColTitleReference => 'शीर्षक और संदर्भ';
+
+  @override
+  String get accountColModule => 'मॉड्यूल';
 
   @override
   String get accountColCategory => 'श्रेणी';
@@ -1911,6 +1933,35 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get accountColActions => 'कार्यवाहियाँ';
+
+  @override
+  String get accountColStatusActions => 'स्थिति / कार्यवाहियाँ';
+
+  @override
+  String get accountFilterModuleLabel => 'मॉड्यूल फ़िल्टर करें:';
+
+  @override
+  String get accountModuleAll => 'All Modules';
+
+  @override
+  String get accountModuleLoans => 'Loans (கடன்)';
+
+  @override
+  String get accountModuleFunds => 'Funds (சேமிப்பு நிதி)';
+
+  @override
+  String get accountModuleChit => 'Chit Groups (சீட்டு)';
+
+  @override
+  String get accountModuleCustom => 'Custom / Expenses';
+
+  @override
+  String get accountLiveSyncedBadge => 'लाइव सिंक्ड';
+
+  @override
+  String accountShowingCount(int start, int end, int total) {
+    return '$total में से $start-$end रीयल-टाइम लेनदेन दिखा रहे हैं';
+  }
 
   @override
   String get accountMissingTitleTitle => 'शीर्षक आवश्यक है';
@@ -2632,6 +2683,17 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get fundSettleOneUnitButton => '1 इकाई';
+
+  @override
+  String get fundSettleTwoUnitButton => '2 इकाइयाँ';
+
+  @override
+  String get fundSettleFiveUnitButton => '5 इकाइयाँ';
+
+  @override
+  String fundSettleUnitsInputMaxHint(String maxUnits) {
+    return 'अधिकतम $maxUnits';
+  }
 
   @override
   String get fundSettleClosedPayoutLabel => 'बंद इकाइयों का भुगतान';

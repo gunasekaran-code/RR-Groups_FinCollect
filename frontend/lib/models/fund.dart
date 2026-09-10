@@ -16,10 +16,11 @@ extension FundStatusX on FundStatus {
   }
 
   static FundStatus fromString(String? v) {
-    switch (v) {
+    switch (v?.toLowerCase()) {
       case 'matured':
         return FundStatus.matured;
-      case 'closed': // was 'settled'
+      case 'closed':
+      case 'settled':
         return FundStatus.settled;
       default:
         return FundStatus.active;
@@ -33,6 +34,9 @@ class FundEntry {
   final double amount;
   final double? balanceAfter;
   final String? method;
+  final String? notes;
+  final bool isBonus;
+  final bool isClosure;
   final bool paid;
 
   FundEntry({
@@ -41,6 +45,9 @@ class FundEntry {
     required this.amount,
     this.balanceAfter,
     this.method,
+    this.notes,
+    this.isBonus = false,
+    this.isClosure = false,
     required this.paid,
   });
 
@@ -56,17 +63,28 @@ class FundEntry {
         ?.toString();
     final amt = _toDouble(json['amount'] ?? json['payment_amount']);
     final methodVal = (json['payment_method'] ?? json['method'])?.toString();
+    final notesVal = (json['notes'] ?? json['description'])?.toString();
+    final entryType =
+        (json['entry_type'] ?? json['type'])?.toString().toLowerCase();
+    final isBonus = entryType == 'bonus' ||
+        (notesVal?.toLowerCase().contains('bonus') ?? false);
+    final isClosure = entryType == 'closure' ||
+        (notesVal?.toLowerCase().contains('closure') ?? false) ||
+        (notesVal?.toLowerCase().contains('settled') ?? false);
     final paidFlag =
         (json['paid'] == true || json['paid'] == 1 || json['paid'] == '1');
 
     return FundEntry(
-        week: weekVal is num
+      week: weekVal is num
           ? weekVal.toInt()
           : int.tryParse(weekVal?.toString() ?? '') ?? 0,
       date: DateTime.tryParse(dateStr ?? '') ?? DateTime.now(),
       amount: amt,
       balanceAfter: _toDoubleOrNull(json['balance_after']),
       method: methodVal,
+      notes: notesVal,
+      isBonus: isBonus,
+      isClosure: isClosure,
       // Treat an entry as paid when a payment_date exists, amount > 0,
       // or an explicit paid flag is present.
       paid: paidFlag || (amt > 0) || (dateStr != null && dateStr.isNotEmpty),
@@ -138,9 +156,8 @@ class Fund {
       units: _toDouble(json['units']) == 0 ? 1 : _toDouble(json['units']),
       status: FundStatusX.fromString(json['status']?.toString()),
       weeklyAmount: _toDouble(json['weekly_amount']),
-      numberOfWeeks: (json['weeks'] as num?)?.toInt() ??
-          (json['number_of_weeks'] as num?)?.toInt() ??
-          0,
+      numberOfWeeks:
+          _toDouble(json['weeks'] ?? json['number_of_weeks']).toInt(),
       maturityBonus: _toDouble(json['bonus'] ?? json['maturity_bonus']),
       startDate: DateTime.tryParse(json['start_date']?.toString() ?? '') ??
           DateTime.now(),
@@ -149,7 +166,7 @@ class Fund {
               DateTime.now(),
       depositedAmount:
           _toDouble(json['collected_amount'] ?? json['deposited_amount']),
-      entriesPaid: (json['entries_paid'] as num?)?.toInt() ?? 0,
+      entriesPaid: _toDouble(json['entries_paid']).toInt(),
     );
   }
 

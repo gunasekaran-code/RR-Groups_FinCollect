@@ -10,7 +10,19 @@ class Customer {
   final String? pan;
   final String? email;
   final String? occupation;
+
+  // Photo / document fields (all stored as base64 data URIs, e.g.
+  // "data:image/jpeg;base64,...."). `photoUrl` is the customer's profile
+  // photo; the rest are scanned/photographed documents. Names mirror the
+  // `customers` table columns (aadhaar_front_url, aadhaar_back_url,
+  // pan_url, signature_url) so they round-trip through the generic REST
+  // endpoint without any backend mapping.
   final String? photoUrl;
+  final String? aadhaarFrontUrl;
+  final String? aadhaarBackUrl;
+  final String? panUrl;
+  final String? signatureUrl;
+
   final String? assignedAgent;
   final String? assignedAgentName;
   final double? latitude;
@@ -29,6 +41,10 @@ class Customer {
     this.email,
     this.occupation,
     this.photoUrl,
+    this.aadhaarFrontUrl,
+    this.aadhaarBackUrl,
+    this.panUrl,
+    this.signatureUrl,
     this.assignedAgent,
     this.assignedAgentName,
     this.latitude,
@@ -47,6 +63,11 @@ class Customer {
       return double.tryParse(value.toString());
     }
 
+    String? nonEmpty(dynamic value) {
+      final s = value?.toString();
+      return (s == null || s.isEmpty) ? null : s;
+    }
+
     return Customer(
       id: json['id']?.toString() ?? '',
       customerId: json['customer_id']?.toString() ?? '',
@@ -60,7 +81,11 @@ class Customer {
       aadhaar: json['aadhaar']?.toString(),
       pan: json['pan']?.toString(),
       occupation: json['occupation']?.toString(),
-      photoUrl: json['photo_url']?.toString(),
+      photoUrl: nonEmpty(json['photo_url']),
+      aadhaarFrontUrl: nonEmpty(json['aadhaar_front_url']),
+      aadhaarBackUrl: nonEmpty(json['aadhaar_back_url']),
+      panUrl: nonEmpty(json['pan_url']),
+      signatureUrl: nonEmpty(json['signature_url']),
       assignedAgent: json['assigned_agent']?.toString(),
       assignedAgentName: json['assigned_agent_name']?.toString(),
       latitude: toDouble(json['latitude']),
@@ -84,6 +109,10 @@ class Customer {
       'pan': pan,
       'occupation': occupation,
       'photo_url': photoUrl,
+      'aadhaar_front_url': aadhaarFrontUrl,
+      'aadhaar_back_url': aadhaarBackUrl,
+      'pan_url': panUrl,
+      'signature_url': signatureUrl,
       'assigned_agent': assignedAgent,
       'latitude': latitude,
       'longitude': longitude,
@@ -97,6 +126,60 @@ class Customer {
     }
 
     return body;
+  }
+
+  /// True when at least one document/photo field is set. Used to decide
+  /// whether a follow-up write is needed to persist them (see
+  /// [documentFields] and [CustomerApiService]).
+  bool get hasDocumentFields =>
+      aadhaarFrontUrl != null ||
+      aadhaarBackUrl != null ||
+      panUrl != null ||
+      signatureUrl != null;
+
+  /// Just the document/photo columns, keyed exactly as the `customers`
+  /// table names them. The create endpoint (customers.php) only writes a
+  /// fixed whitelist of columns that excludes these, so after creating (or
+  /// updating alongside a login change) a customer, this is PATCHed
+  /// separately through the generic REST endpoint, which writes any real
+  /// column on the table.
+  Map<String, dynamic> documentFields() => {
+        'photo_url': photoUrl,
+        'aadhaar_front_url': aadhaarFrontUrl,
+        'aadhaar_back_url': aadhaarBackUrl,
+        'pan_url': panUrl,
+        'signature_url': signatureUrl,
+      };
+
+  Customer copyWith({
+    String? photoUrl,
+    String? aadhaarFrontUrl,
+    String? aadhaarBackUrl,
+    String? panUrl,
+    String? signatureUrl,
+  }) {
+    return Customer(
+      id: id,
+      customerId: customerId,
+      fullName: fullName,
+      mobile: mobile,
+      address: address,
+      aadhaar: aadhaar,
+      pan: pan,
+      email: email,
+      occupation: occupation,
+      photoUrl: photoUrl ?? this.photoUrl,
+      aadhaarFrontUrl: aadhaarFrontUrl ?? this.aadhaarFrontUrl,
+      aadhaarBackUrl: aadhaarBackUrl ?? this.aadhaarBackUrl,
+      panUrl: panUrl ?? this.panUrl,
+      signatureUrl: signatureUrl ?? this.signatureUrl,
+      assignedAgent: assignedAgent,
+      assignedAgentName: assignedAgentName,
+      latitude: latitude,
+      longitude: longitude,
+      loanStatus: loanStatus,
+      createdAt: createdAt,
+    );
   }
 
   @override

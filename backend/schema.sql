@@ -17,6 +17,7 @@ DROP TABLE IF EXISTS notifications;
 DROP TABLE IF EXISTS handovers;
 DROP TABLE IF EXISTS fund_payments;
 DROP TABLE IF EXISTS funds;
+DROP TABLE IF EXISTS chit_auctions;
 DROP TABLE IF EXISTS chit_passbook;
 DROP TABLE IF EXISTS chit_payments;
 DROP TABLE IF EXISTS chit_schedules;
@@ -155,7 +156,12 @@ CREATE TABLE collections (
   created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_collections_loan (loan_id),
   INDEX idx_collections_agent (agent_id),
-  INDEX idx_collections_date (collection_date)
+  INDEX idx_collections_date (collection_date),
+  -- The recycle bin, soft_delete_cascade() and restore all derive what a
+  -- delete takes with it from the cascading keys. Without this one, deleting a
+  -- loan left its receipts live and still counted in Cash In Hand.
+  CONSTRAINT fk_collections_loan FOREIGN KEY (loan_id)
+    REFERENCES loans(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------- chit_groups ----------
@@ -174,7 +180,15 @@ CREATE TABLE chit_groups (
   draw_frequency       ENUM('monthly_1', 'monthly_2', 'monthly_3', 'custom', 'every_5_days', 'every_10_days', 'interval_days') NOT NULL DEFAULT 'monthly_1',
   draw_days            VARCHAR(191) NULL DEFAULT '1',
   draw_dates           TEXT         NULL,
-  created_at           DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+  -- Which agent collects for this group. An agent only ever sees their own;
+  -- chit groups were the one module with no agent link, so every agent saw
+  -- every group in the business.
+  assigned_agent       CHAR(36)     NULL,
+  agent_name           VARCHAR(191) NULL,
+  created_at           DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_chit_groups_agent (assigned_agent),
+  CONSTRAINT fk_chit_groups_agent FOREIGN KEY (assigned_agent)
+    REFERENCES profiles(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------- chit_members ----------
@@ -281,6 +295,52 @@ CREATE TABLE chit_passbook (
     REFERENCES chit_groups(id) ON DELETE CASCADE,
   CONSTRAINT fk_passbook_member FOREIGN KEY (member_id)
     REFERENCES chit_members(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------- chit_auctions (who won each draw, and was the prize paid) ----------
+-- The draw sheet says what a draw is worth; this says who took it and whether
+-- the money left the safe. Settling writes an account_ledger cash_out row, so
+-- the largest movement in a chit group finally reaches the account book.
+--   payout   = pool - discount - commission   (handed to the winner)
+--   dividend = discount - commission          (shared among the members)
+CREATE TABLE chit_auctions (
+  id             CHAR(36)      NOT NULL PRIMARY KEY,
+  group_id       CHAR(36)      NOT NULL,
+  installment_no INT           NOT NULL,
+  schedule_id    CHAR(36)      NULL,
+  group_number   VARCHAR(64)   NULL,
+  group_name     VARCHAR(191)  NULL,
+  auction_date   DATE          NULL,
+  member_id      CHAR(36)      NULL,
+  customer_id    CHAR(36)      NULL,
+  member_name    VARCHAR(191)  NULL,
+  pool_amount    DECIMAL(14,2) NOT NULL DEFAULT 0,
+  bid_amount     DECIMAL(14,2) NOT NULL DEFAULT 0,
+  commission     DECIMAL(14,2) NOT NULL DEFAULT 0,
+  payout_amount  DECIMAL(14,2) NOT NULL DEFAULT 0,
+  dividend_total DECIMAL(14,2) NOT NULL DEFAULT 0,
+  status         ENUM('won','settled') NOT NULL DEFAULT 'won',
+  payout_date    DATE          NULL,
+  payment_method ENUM('cash','upi','card','bank','cheque') NOT NULL DEFAULT 'cash',
+  ledger_id      CHAR(36)      NULL,
+  agent_id       CHAR(36)      NULL,
+  agent_name     VARCHAR(191)  NULL,
+  notes          TEXT          NULL,
+  created_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  delflag        TINYINT(1)    NOT NULL DEFAULT 0,
+  deleted_at     DATETIME      NULL,
+  deleted_by     CHAR(36)      NULL,
+  -- A draw has one winner. Without this a double submit pays the prize twice.
+  UNIQUE KEY uniq_auction_draw (group_id, installment_no),
+  INDEX idx_auction_member (member_id),
+  INDEX idx_auction_status (status),
+  INDEX idx_auction_delflag (delflag),
+  CONSTRAINT fk_auction_group FOREIGN KEY (group_id)
+    REFERENCES chit_groups(id) ON DELETE CASCADE,
+  -- SET NULL, not CASCADE: removing a member must not erase the record that a
+  -- prize was paid out of the group's money.
+  CONSTRAINT fk_auction_member FOREIGN KEY (member_id)
+    REFERENCES chit_members(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------- funds (daily-deposit savings scheme) ----------

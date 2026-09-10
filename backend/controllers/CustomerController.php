@@ -50,21 +50,47 @@ class CustomerController extends Controller
         return sprintf('RRG-CUS-%04d', $maxNum + 1);
     }
 
-    /** Fields shared by the customers row. */
-    private function customerData(array $b): array
+    /**
+     * Columns of the customers row this endpoint accepts, and how each is
+     * coerced. The KYC images are ordinary text columns holding data URIs,
+     * so they clean like any other string.
+     */
+    private const FIELDS = [
+        'full_name'         => 'text',
+        'mobile'            => 'text',
+        'address'           => 'text',
+        'aadhaar'           => 'text',
+        'pan'               => 'text',
+        'occupation'        => 'text',
+        'photo_url'         => 'text',
+        'aadhaar_front_url' => 'text',
+        'aadhaar_back_url'  => 'text',
+        'pan_url'           => 'text',
+        'signature_url'     => 'text',
+        'assigned_agent'    => 'text',
+        'latitude'          => 'num',
+        'longitude'         => 'num',
+    ];
+
+    /**
+     * Fields shared by the customers row.
+     *
+     * $partial narrows an update to the keys the caller actually sent. Without
+     * it every PATCH writes the whole column list, so a request carrying only
+     * a document image would blank the customer's address, PAN and map pin on
+     * its way through — the create path still wants the full list, where a
+     * missing key genuinely means NULL.
+     */
+    private function customerData(array $b, bool $partial = false): array
     {
-        return [
-            'full_name'      => self::clean($b['full_name'] ?? null),
-            'mobile'         => self::clean($b['mobile'] ?? null),
-            'address'        => self::clean($b['address'] ?? null),
-            'aadhaar'        => self::clean($b['aadhaar'] ?? null),
-            'pan'            => self::clean($b['pan'] ?? null),
-            'occupation'     => self::clean($b['occupation'] ?? null),
-            'photo_url'      => self::clean($b['photo_url'] ?? null),
-            'assigned_agent' => self::clean($b['assigned_agent'] ?? null),
-            'latitude'       => self::num($b['latitude'] ?? null),
-            'longitude'      => self::num($b['longitude'] ?? null),
-        ];
+        $out = [];
+        foreach (self::FIELDS as $col => $kind) {
+            if ($partial && !array_key_exists($col, $b)) continue;
+            $out[$col] = $kind === 'num'
+                ? self::num($b[$col] ?? null)
+                : self::clean($b[$col] ?? null);
+        }
+        return $out;
     }
 
     private function store(): void
@@ -104,11 +130,11 @@ class CustomerController extends Controller
         if (!$existingCustomer) json_error('Customer not found', 404);
 
         $b = $this->body();
-        $data = $this->customerData($b);
-        if (array_key_exists('full_name', $b) && !$data['full_name']) {
+        $data = $this->customerData($b, true);
+        if (array_key_exists('full_name', $b) && !($data['full_name'] ?? null)) {
             json_error('Full name cannot be empty', 400);
         }
-        Customer::updateWhere($data, ' WHERE id = ?', [$id]);
+        if ($data) Customer::updateWhere($data, ' WHERE id = ?', [$id]);
 
         // Keep loans in sync with the customer's assigned agent.
         if (array_key_exists('assigned_agent', $b)) {
@@ -141,8 +167,11 @@ class CustomerController extends Controller
             if (array_key_exists('mobile', $b))    $set['mobile'] = $data['mobile'];
             if ($set) Profile::updateWhere($set, ' WHERE id = ?', [$login['id']]);
         } elseif ($email !== '' || $password !== '') {
-            $this->assertLoginCredentials($email, $password, $data['mobile'] ?? ($existingCustomer['mobile'] ?? null), null);
-            $this->createLogin($id, $email, $password, $data, $existingCustomer['customer_id'] ?? null);
+            // A partial update may carry no name or mobile at all, so the new
+            // login falls back to what the customer record already holds.
+            $identity = $data + $existingCustomer;
+            $this->assertLoginCredentials($email, $password, $identity['mobile'] ?? null, null);
+            $this->createLogin($id, $email, $password, $identity, $existingCustomer['customer_id'] ?? null);
         }
 
         $customer = Customer::select(' WHERE id = ?', [$id])[0] ?? null;
@@ -190,7 +219,7 @@ class CustomerController extends Controller
             // mobile-only login.
             'email'         => ($email !== null && $email !== '') ? $email : null,
             'password_hash' => password_hash($password, PASSWORD_BCRYPT),
-            'full_name'     => $data['full_name'],
+            'full_name'     => $data['full_name'] ?? null,
             'mobile'        => $data['mobile'] ?? null,
             'role'          => 'customer',
             'user_code'     => $userCode,

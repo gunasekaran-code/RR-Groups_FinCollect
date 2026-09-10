@@ -2,6 +2,7 @@
 /// Mirrors the `chit_members` table.
 ///
 /// Save as: lib/models/chit_member.dart
+library;
 
 enum ChitPaymentStatus { paid, partial, overdue, pending }
 

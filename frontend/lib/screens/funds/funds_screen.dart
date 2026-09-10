@@ -256,13 +256,14 @@ class _FundsScreenState extends State<FundsScreen> {
       await FundApiService.recordCollection(
         fund.id,
         collectedAmount: fund.totalDeposit,
-        status: FundStatus.matured.label,
+        status: FundStatus.settled.label,
         paymentAmount: remaining > 0 ? remaining : 0,
         paymentMethod: 'Cash',
         paymentDate: DateTime.now(),
         fundCode: fund.code,
         customerId: fund.customerId,
         customerName: fund.customerName,
+        notes: 'Settled in full',
       );
       if (!mounted) return;
       _loadData();
@@ -704,8 +705,7 @@ class _FundCard extends StatelessWidget {
               const SizedBox(width: 10),
               Expanded(
                 child: _MiniStat(
-                    label: l10n.fundCardWeeks,
-                    value: '${fund.numberOfWeeks}'),
+                    label: l10n.fundCardWeeks, value: '${fund.numberOfWeeks}'),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -1132,7 +1132,9 @@ class _FundFormDialogState extends State<_FundFormDialog> {
               children: [
                 Expanded(
                   child: Text(
-                      _isEditing ? l10n.fundFormTitleEdit : l10n.fundFormTitleAdd,
+                      _isEditing
+                          ? l10n.fundFormTitleEdit
+                          : l10n.fundFormTitleAdd,
                       style: const TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
@@ -1154,7 +1156,7 @@ class _FundFormDialogState extends State<_FundFormDialog> {
                     color: AppColors.kTextMuted)),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
-              value: _selectedCustomerId,
+              initialValue: _selectedCustomerId,
               isExpanded: true,
               decoration: InputDecoration(
                   isDense: true, hintText: l10n.fundFormFieldCustomerHint),
@@ -1179,7 +1181,7 @@ class _FundFormDialogState extends State<_FundFormDialog> {
                     color: AppColors.kTextMuted)),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
-              value: _selectedAgentId,
+              initialValue: _selectedAgentId,
               isExpanded: true,
               decoration: InputDecoration(
                   isDense: true, hintText: l10n.fundFormFieldAgentHint),
@@ -1460,8 +1462,8 @@ class _CollectDialogState extends State<_CollectDialog> {
     if (amount > remaining + 0.01) {
       ToastService.show(
         title: l10n.fundCollectDialogNotSavedTitle,
-        message: l10n.fundCollectDialogNotSavedMessage(
-            formatIndianCurrency(remaining)),
+        message: l10n
+            .fundCollectDialogNotSavedMessage(formatIndianCurrency(remaining)),
         type: ToastType.warning,
       );
       return;
@@ -1488,6 +1490,7 @@ class _CollectDialogState extends State<_CollectDialog> {
         fundCode: widget.fund.code,
         customerId: widget.fund.customerId,
         customerName: widget.fund.customerName,
+        notes: 'Collection',
       );
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -1658,12 +1661,13 @@ class _CollectDialogState extends State<_CollectDialog> {
                 ),
               ],
             );
-            if (isNarrow)
+            if (isNarrow) {
               return Column(children: [
                 methodField,
                 const SizedBox(height: 16),
                 dateField
               ]);
+            }
             return Row(children: [
               Expanded(child: methodField),
               const SizedBox(width: 16),
@@ -1734,12 +1738,22 @@ class _SettleFundDialogState extends State<_SettleFundDialog> {
   DateTime _settlementDate = DateTime.now();
   bool _isSubmitting = false;
 
-  // Funds are modeled as a single unit in this schema (no `units` column),
-  // so partial closure treats the whole fund as "1 unit" you can close a
-  // fraction of. Wire this from a real units field if you add one later.
-  static const double _maxUnits = 1;
-  late final TextEditingController _unitsCtrl =
-      TextEditingController(text: _maxUnits.toString());
+  // Sourced straight from the fund's own `units` column (funds.units), so a
+  // partial closure always works against however many units are still
+  // active right now — including ones already shrunk by an earlier closure.
+  double get _maxUnits => widget.fund.units > 0 ? widget.fund.units : 1;
+
+  // Quick-select presets shown as chips above the manual input.
+  static const List<double> _quickUnitOptions = [0.5, 1, 2, 5];
+
+  late final TextEditingController _unitsCtrl = TextEditingController(
+    text: _formatUnits(_quickUnitOptions.first < _maxUnits
+        ? _quickUnitOptions.first
+        : _maxUnits),
+  );
+
+  static String _formatUnits(double units) =>
+      units % 1 == 0 ? units.toStringAsFixed(0) : units.toString();
 
   double get _unitsToClose =>
       (double.tryParse(_unitsCtrl.text) ?? 0).clamp(0, _maxUnits);
@@ -1809,15 +1823,31 @@ class _SettleFundDialogState extends State<_SettleFundDialog> {
     setState(() => _isSubmitting = true);
     final fund = widget.fund;
     try {
-      // Step 1: shrink the fund's ongoing target (admin-only generic PATCH,
-      // same shape update() already uses — no new PHP endpoint needed).
-      final shrunk = fund.copyWith(
-        weeklyAmount: _newWeeklyAmount,
-        numberOfWeeks:
-            fund.numberOfWeeks - (fund.numberOfWeeks * _fraction).round(),
-        maturityBonus: fund.maturityBonus - _proportionalBonus,
-      );
-      await FundApiService.update(fund.id, shrunk);
+      // Preserve the original maturity terms when the last active unit is
+      // closed. This keeps the completed passbook faithful to the backend
+      // fund agreement instead of shrinking it to zero first.
+      if (_remainingUnits <= 0.0001) {
+        await FundApiService.settleInFull(
+          fund.id,
+          paymentMethod: _paymentMethod,
+          settlementDate: _settlementDate,
+          totalDeposit: fund.totalDeposit,
+          depositedAmount: fund.depositedAmount,
+          fundCode: fund.code,
+          customerId: fund.customerId,
+          customerName: fund.customerName,
+        );
+        if (!mounted) return;
+        Navigator.of(context).pop(true);
+        return;
+      }
+
+      // Keep the original scheme terms on the fund record. A unit closure is
+      // a settlement event, not a new fund: the card and passbook must still
+      // show the weekly amount, weeks, bonus and maturity payout agreed when
+      // this fund was created.
+      final updatedFund = fund.copyWith(units: _remainingUnits);
+      await FundApiService.update(fund.id, updatedFund);
 
       // Step 2: credit the closed portion's payout onto collected_amount via
       // the already-allowed recordCollection path.
@@ -1825,7 +1855,7 @@ class _SettleFundDialogState extends State<_SettleFundDialog> {
           .clamp(0, fund.totalDeposit)
           .toDouble();
       final newStatus =
-          _remainingUnits <= 0 ? FundStatus.matured.label : fund.status.label;
+          _remainingUnits <= 0 ? FundStatus.settled.label : fund.status.label;
       await FundApiService.recordCollection(
         fund.id,
         collectedAmount: newCollected,
@@ -1836,6 +1866,7 @@ class _SettleFundDialogState extends State<_SettleFundDialog> {
         fundCode: fund.code,
         customerId: fund.customerId,
         customerName: fund.customerName,
+        notes: 'Unit closure',
       );
 
       if (!mounted) return;
@@ -1848,6 +1879,47 @@ class _SettleFundDialogState extends State<_SettleFundDialog> {
           message: e.toString(),
           type: ToastType.error);
     }
+  }
+
+  /// Stylish, tappable "N Units" preset chip. Selected state fills gold;
+  /// a preset beyond what's still active on the fund is greyed out and
+  /// disabled rather than hidden, so the row stays visually stable.
+  Widget _unitOptionChip(double value, String label) {
+    final selected = (_unitsToClose - value).abs() < 0.001;
+    final disabled = value > _maxUnits + 0.0001;
+    return InkWell(
+      onTap: disabled
+          ? null
+          : () => setState(() => _unitsCtrl.text = _formatUnits(value)),
+      borderRadius: BorderRadius.circular(999),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: disabled
+              ? const Color(0xFFF3F4F6)
+              : selected
+                  ? AppColors.kGold
+                  : Colors.white,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: selected && !disabled ? AppColors.kGold : AppColors.kBorder,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            color: disabled
+                ? AppColors.kTextMuted
+                : selected
+                    ? Colors.white
+                    : AppColors.kTextDark,
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _tabButton(String label, IconData icon, _ClosureMode mode) {
@@ -1898,9 +1970,11 @@ class _SettleFundDialogState extends State<_SettleFundDialog> {
     final dd = _settlementDate.day.toString().padLeft(2, '0');
     final mm = _settlementDate.month.toString().padLeft(2, '0');
     final yyyy = _settlementDate.year.toString();
+    final screenWidth = MediaQuery.of(context).size.width;
+    final hPad = screenWidth < 380 ? 16.0 : 24.0;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+      padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 32),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1919,7 +1993,7 @@ class _SettleFundDialogState extends State<_SettleFundDialog> {
                     const SizedBox(height: 2),
                     Text(
                         l10n.fundSettleDialogSubtitle(fund.code,
-                            fund.customerName, _maxUnits.toStringAsFixed(0)),
+                            fund.customerName, _formatUnits(_maxUnits)),
                         style: const TextStyle(
                             color: AppColors.kTextMuted, fontSize: 13)),
                   ],
@@ -1955,30 +2029,34 @@ class _SettleFundDialogState extends State<_SettleFundDialog> {
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
                     color: AppColors.kTextMuted)),
-            const SizedBox(height: 8),
-            Row(
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _unitsCtrl,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    onChanged: (_) => setState(() {}),
-                    decoration: const InputDecoration(isDense: true),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                OutlinedButton(
-                  onPressed: () => setState(() => _unitsCtrl.text = '0.5'),
-                  child: Text(l10n.fundSettleHalfUnitButton),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton(
-                  onPressed: () =>
-                      setState(() => _unitsCtrl.text = _maxUnits.toString()),
-                  child: Text(l10n.fundSettleOneUnitButton),
-                ),
+                _unitOptionChip(0.1, '0.1 Units'),
+                _unitOptionChip(0.5, l10n.fundSettleHalfUnitButton),
+                _unitOptionChip(1, l10n.fundSettleOneUnitButton),
+                _unitOptionChip(2, l10n.fundSettleTwoUnitButton),
+                _unitOptionChip(5, l10n.fundSettleFiveUnitButton),
               ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _unitsCtrl,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                isDense: true,
+                prefixIcon: const Icon(Icons.savings_outlined,
+                    size: 18, color: AppColors.kTextMuted),
+                hintText: l10n.fundSettleUnitsToCloseLabel,
+                suffixText:
+                    l10n.fundSettleUnitsInputMaxHint(_formatUnits(_maxUnits)),
+                suffixStyle:
+                    const TextStyle(fontSize: 12, color: AppColors.kTextMuted),
+              ),
             ),
             const SizedBox(height: 16),
             Container(
@@ -2018,8 +2096,8 @@ class _SettleFundDialogState extends State<_SettleFundDialog> {
                                 fontSize: 12, color: AppColors.kSuccess)),
                         const SizedBox(height: 4),
                         Text(
-                            l10n.fundSettleRemainingUnitsValue(_remainingUnits
-                                .toStringAsFixed(
+                            l10n.fundSettleRemainingUnitsValue(
+                                _remainingUnits.toStringAsFixed(
                                     _remainingUnits % 1 == 0 ? 0 : 1)),
                             style: const TextStyle(
                                 fontSize: 18,
@@ -2140,12 +2218,13 @@ class _SettleFundDialogState extends State<_SettleFundDialog> {
                 ),
               ],
             );
-            if (isNarrow)
+            if (isNarrow) {
               return Column(children: [
                 methodField,
                 const SizedBox(height: 16),
                 dateField
               ]);
+            }
             return Row(children: [
               Expanded(child: methodField),
               const SizedBox(width: 16),
@@ -2154,11 +2233,15 @@ class _SettleFundDialogState extends State<_SettleFundDialog> {
           }),
           const SizedBox(height: 20),
           Container(
+            width: double
+                .infinity, // Ensures the container adapts to the full mobile screen width
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
                 color: const Color(0xFFF3F4F6),
                 borderRadius: BorderRadius.circular(12)),
             child: Column(
+              mainAxisSize: MainAxisSize
+                  .min, // Prevents the column from taking unnecessary vertical space
               children: [
                 _SummaryRow(
                   label: _mode == _ClosureMode.partial
@@ -2167,9 +2250,8 @@ class _SettleFundDialogState extends State<_SettleFundDialog> {
                   value: _mode == _ClosureMode.partial
                       ? l10n.fundSettleSummaryClosingTargetValue(
                           formatIndianCurrency(_closingDepositTarget),
-                          _unitsToClose.toStringAsFixed(
-                              _unitsToClose % 1 == 0 ? 0 : 1),
-                          _maxUnits.toStringAsFixed(0))
+                          _formatUnits(_unitsToClose),
+                          _formatUnits(_maxUnits))
                       : formatIndianCurrency(fund.totalDeposit),
                 ),
                 const SizedBox(height: 8),
@@ -2275,31 +2357,37 @@ class _PassbookDialogState extends State<_PassbookDialog> {
       Fund fund, List<FundEntry> paidEntries) {
     final totalWeeks =
         fund.numberOfWeeks > 0 ? fund.numberOfWeeks : paidEntries.length;
-    final originalRows = [...paidEntries]
+    final paymentRows = paidEntries.where((entry) => !entry.isBonus).toList()
       ..sort((a, b) => a.date.compareTo(b.date));
     final originalPayments = <FundEntry>[];
-    for (var i = 0; i < originalRows.length; i++) {
-      final entry = originalRows[i];
+    var nextFallbackWeek = 1;
+    for (final entry in paymentRows) {
+      final week = entry.week > 0
+          ? entry.week
+          : entry.isClosure
+              ? totalWeeks
+              : nextFallbackWeek++;
       originalPayments.add(entry.week > 0
           ? entry
           : FundEntry(
-              week: i + 1,
+              week: week,
               date: entry.date,
               amount: entry.amount,
               balanceAfter: entry.balanceAfter,
               method: entry.method,
+              notes: entry.notes,
+              isClosure: entry.isClosure,
               paid: entry.paid,
             ));
     }
-    final schedule = <FundEntry>[...originalPayments];
-
-    if (fund.depositedAmount >= fund.totalDeposit - 0.01) {
-      return schedule;
-    }
+    final schedule = <FundEntry>[...originalPayments]
+      ..sort((a, b) => a.week.compareTo(b.week));
 
     // The database payment rows are the only source for paid history. Add
     // pending rows only to complete the fund's configured number of weeks.
-    for (int week = originalPayments.length + 1; week <= totalWeeks; week++) {
+    final paidWeeks = originalPayments.map((entry) => entry.week).toSet();
+    for (int week = 1; week <= totalWeeks; week++) {
+      if (paidWeeks.contains(week)) continue;
       schedule.add(FundEntry(
         week: week,
         date: fund.startDate.add(Duration(days: 7 * (week - 1))),
@@ -2308,12 +2396,27 @@ class _PassbookDialogState extends State<_PassbookDialog> {
         paid: false,
       ));
     }
+    schedule.sort((a, b) => a.week.compareTo(b.week));
+
+    final isComplete = fund.status != FundStatus.active ||
+        fund.depositedAmount >= fund.totalDeposit - 0.01;
+    if (isComplete && fund.maturityBonus > 0) {
+      schedule.add(FundEntry(
+        week: 0,
+        date: fund.maturityDate,
+        amount: fund.maturityBonus,
+        balanceAfter: fund.depositedAmount + fund.maturityBonus,
+        method: 'credited',
+        isBonus: true,
+        paid: true,
+      ));
+    }
     return schedule;
   }
 
   static const _weekdayAbbr = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-  int get _paidCount => _schedule.where((e) => e.paid).length;
+  int get _paidCount => _schedule.where((e) => e.paid && !e.isBonus).length;
 
   // DEPOSITED reads straight off fund.depositedAmount — the real
   // funds.collected_amount — rather than summing fund_payments rows, so it
@@ -2322,7 +2425,7 @@ class _PassbookDialogState extends State<_PassbookDialog> {
 
   FundEntry? get _nextDue {
     for (final e in _schedule) {
-      if (!e.paid) return e;
+      if (!e.paid && !e.isBonus) return e;
     }
     return null;
   }
@@ -2332,9 +2435,11 @@ class _PassbookDialogState extends State<_PassbookDialog> {
     final l10n = AppLocalizations.of(context);
     final fund = widget.fund;
     final next = _nextDue;
+    final screenWidth = MediaQuery.of(context).size.width;
+    final hPad = screenWidth < 380 ? 14.0 : 24.0;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+      padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 32),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2364,13 +2469,33 @@ class _PassbookDialogState extends State<_PassbookDialog> {
                             color: AppColors.kTextDark)),
                     const SizedBox(height: 2),
                     Text(
-                        l10n.fundPassbookSubtitle(
-                            fund.code, fund.customerName),
+                        l10n.fundPassbookSubtitle(fund.code, fund.customerName),
                         style: const TextStyle(
                             color: AppColors.kTextMuted, fontSize: 13)),
                   ],
                 ),
               ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: fund.status == FundStatus.active
+                      ? const Color(0xFFFEF3C7)
+                      : const Color(0xFFDCFCE7),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  fund.status.label,
+                  style: TextStyle(
+                    color: fund.status == FundStatus.active
+                        ? AppColors.kWarning
+                        : AppColors.kSuccess,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
               IconButton(
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
@@ -2548,6 +2673,74 @@ class _PassbookDialogState extends State<_PassbookDialog> {
                     const Divider(height: 1, color: AppColors.kBorder),
                 itemBuilder: (context, i) {
                   final e = _schedule[i];
+                  if (e.isBonus) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            flex: 1,
+                            child: Container(
+                              width: 28,
+                              height: 28,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFEF3C7),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: const Icon(Icons.card_giftcard_outlined,
+                                  size: 16, color: AppColors.kWarning),
+                            ),
+                          ),
+                          Expanded(
+                            flex: 3,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  l10n.fundPassbookSummaryBonus,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.kWarning,
+                                  ),
+                                ),
+                                Text(
+                                  '${formatDate(e.date)} · ${e.method ?? l10n.fundPassbookPaidFallback}',
+                                  style: const TextStyle(
+                                      fontSize: 12, color: AppColors.kWarning),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Text(
+                                  '+ ${formatIndianCurrency(e.amount)}',
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.kWarning,
+                                  ),
+                                ),
+                                Text(
+                                  l10n.fundPassbookBalanceValue(
+                                      formatIndianCurrency(
+                                          e.balanceAfter ?? 0)),
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      color: AppColors.kTextMuted),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }
                   final isNext = next != null && e.week == next.week;
 
                   final balance = e.balanceAfter ??

@@ -117,7 +117,18 @@ class CustomerApiService {
       body:
           jsonEncode(customer.toRequestBody(email: email, password: password)),
     );
-    final data = _decodeObject(res);
+    var data = _decodeObject(res);
+
+    // customers.php only inserts a fixed column whitelist that excludes the
+    // KYC document photos, so a brand-new customer's Aadhaar/PAN/signature
+    // never lands in the row above. Patch them in separately through the
+    // generic REST endpoint, which writes any real column on the table.
+    if (customer.hasDocumentFields) {
+      final newId = data['id']?.toString();
+      if (newId != null && newId.isNotEmpty) {
+        data = await _patchDocumentFields(newId, customer);
+      }
+    }
     return Customer.fromJson(data);
   }
 
@@ -130,7 +141,11 @@ class CustomerApiService {
     final body = jsonEncode(
       customer.toRequestBody(email: email, password: password),
     );
-    final endpoint = email != null || password != null
+    // A login change (email/password) has to go through customers.php, but
+    // that endpoint's column whitelist drops the KYC document photos just
+    // like create() does — so those still need the REST follow-up below.
+    final wantsLogin = email != null || password != null;
+    final endpoint = wantsLogin
         ? Uri.parse('$_customerEndpoint?id=$id')
         : Uri.parse('$_restEndpoint?table=customers&id=eq.$id');
     final res = await postWithMethodOverride(
@@ -139,8 +154,26 @@ class CustomerApiService {
       headers: _headers,
       body: body,
     );
-    final data = _decodeObject(res);
+    var data = _decodeObject(res);
+
+    if (wantsLogin && customer.hasDocumentFields) {
+      data = await _patchDocumentFields(id, customer);
+    }
     return Customer.fromJson(data);
+  }
+
+  /// Writes just the document/photo columns for [id] through the generic
+  /// REST endpoint, which (unlike customers.php) accepts any real column on
+  /// the `customers` table. Returns the updated row.
+  Future<Map<String, dynamic>> _patchDocumentFields(
+      String id, Customer customer) async {
+    final res = await postWithMethodOverride(
+      Uri.parse('$_restEndpoint?table=customers&id=eq.$id'),
+      method: 'PATCH',
+      headers: _headers,
+      body: jsonEncode(customer.documentFields()),
+    );
+    return _decodeObject(res);
   }
 
   Future<void> delete(String id) async {

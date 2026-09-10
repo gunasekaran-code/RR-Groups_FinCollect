@@ -6,11 +6,49 @@ class QueryParser
 {
     private const RESERVED = ['table', 'select', 'order', 'limit', 'offset', 'upsert', 'on_conflict', 'action', 'token'];
 
+    /**
+     * Clauses the server adds on its own behalf, ANDed into every WHERE built
+     * for the rest of the request.
+     *
+     * $_GET filters can only ever say `column op value`, which is enough to
+     * hide another agent's loans but not to express "a collection on one of my
+     * loans *or* one I took myself" — and turning that into an id list would
+     * put thousands of placeholders in the query. A scope is a small piece of
+     * SQL with its own bindings instead.
+     *
+     * @var array<int,array{0:string,1:array}>
+     */
+    private static array $scopes = [];
+
+    /** Add a clause the caller cannot see, override or remove. */
+    public static function addScope(string $sql, array $binds = []): void
+    {
+        $sql = trim($sql);
+        if ($sql === '') return;
+        foreach (self::$scopes as $existing) {
+            if ($existing[0] === $sql && $existing[1] === $binds) return;   // idempotent
+        }
+        self::$scopes[] = [$sql, $binds];
+    }
+
+    /** Drop every registered scope. For tests, which share one process. */
+    public static function resetScopes(): void
+    {
+        self::$scopes = [];
+    }
+
     /** @return array{0:string,1:array} [sqlFragment, binds] */
     public static function where(array $columns): array
     {
         if (empty($columns)) {
-            return ['', []];
+            // A scope must still bite on a table with no column map, or the
+            // absence of one would be a way past it.
+            $sql = ''; $binds = [];
+            foreach (self::$scopes as [$clause, $b]) {
+                $sql .= ($sql === '' ? ' WHERE ' : ' AND ') . "($clause)";
+                foreach ($b as $one) $binds[] = $one;
+            }
+            return [$sql, $binds];
         }
         $clauses = [];
         $binds = [];
@@ -51,6 +89,13 @@ class QueryParser
                     json_error("Unsupported filter operator: $op", 400);
             }
         }
+        // Scopes go on last so a caller's filter can only ever narrow the
+        // result further, never widen it past what the scope allows.
+        foreach (self::$scopes as [$clause, $scopeBinds]) {
+            $clauses[] = "($clause)";
+            foreach ($scopeBinds as $one) $binds[] = $one;
+        }
+
         $sql = $clauses ? (' WHERE ' . implode(' AND ', $clauses)) : '';
         return [$sql, $binds];
     }

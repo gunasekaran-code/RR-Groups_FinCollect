@@ -300,7 +300,7 @@ class _OverdueScreenState extends State<OverdueScreen> {
         // even on an error/empty state.
         children: [
           const SizedBox(height: 120),
-          Icon(Icons.wifi_off_rounded, size: 40, color: AppColors.kTextMuted),
+          const Icon(Icons.wifi_off_rounded, size: 40, color: AppColors.kTextMuted),
           const SizedBox(height: 12),
           Center(
             child: Text(

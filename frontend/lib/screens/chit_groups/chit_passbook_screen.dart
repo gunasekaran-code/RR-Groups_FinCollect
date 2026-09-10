@@ -250,8 +250,8 @@ class _PassbookHeaderCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: const [
+          const Row(
+            children: [
               Icon(Icons.menu_book_rounded, color: _gold, size: 18),
               SizedBox(width: 8),
               Text(

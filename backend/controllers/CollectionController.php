@@ -1,7 +1,7 @@
 <?php
 // Collections (loan repayments) with role enforcement:
-//   - Read:   any authenticated user (frontend scopes: a customer sees only
-//             their own receipts, an agent their own collections).
+//   - Read:   a customer sees only their own receipts; an agent sees the
+//             collections on their loans plus any they took themselves.
 //   - Create/Update: admin or agent (field agents record payments).
 //   - Delete: admin only.
 //   Customers can never write collections.
@@ -35,6 +35,13 @@ class CollectionController extends ResourceController
             if ($role !== 'admin') {
                 json_error('Only admins can delete collections', 403);
             }
+        }
+
+        // A collection has no agent of its own that settles the question: it
+        // belongs to whoever holds the loan, *and* to whoever took the cash and
+        // still owes it at handover. AgentScope allows both.
+        if ($method === 'GET') {
+            AgentScope::apply($this->model::table(), $role, $claims['sub'] ?? null);
         }
 
         parent::handle();

@@ -56,9 +56,10 @@ class LoanService {
   Future<List<LoanRecord>> fetchLoans({
     List<Customer> customers = const [],
     List<Agent> agents = const [],
+    bool forceRefresh = false,
   }) async {
     final cacheKey = '${customers.length}_${agents.length}';
-    if (_loansCache.containsKey(cacheKey)) {
+    if (!forceRefresh && _loansCache.containsKey(cacheKey)) {
       return List.unmodifiable(_loansCache[cacheKey]!);
     }
     final rows = await _api.list('loans');

@@ -47,6 +47,10 @@
   "customersFilterActive": "Active",
   "customersFilterOverdue": "Overdue",
   "customersFilterInactive": "Inactive",
+  "customersStatTotal": "Total Customers",
+  "customersStatActive": "Active Customers",
+  "customersStatOverdue": "Overdue Customers",
+  "customersStatInactive": "Inactive Customers",
   "customersNoResults": "No customers found",
   "retry": "Retry",
 
@@ -844,6 +848,7 @@
   "accountOutstandingMoneySubtitle": "Total money owed to you",
   "accountBreakdownLoanOutstanding": "Loan Outstanding",
   "accountBreakdownChitPending": "Chit Pending",
+  "accountBreakdownChitPendingNote": "Future member contributions — not counted as money lent",
   "accountBreakdownFundPending": "Fund Pending",
   "accountBreakdownCustomMoneyLent": "Custom Money Lent",
 
@@ -852,15 +857,35 @@
   "accountLoadFailedTitle": "Failed to Load Entries",
 
   "accountEmptyStateTitle": "No Entries Yet",
-  "accountEmptyStateBody": "Add your first cash or lending entry to start tracking your account book.",
+  "accountEmptyStateBody": "All collections from Loans, Weekly Funds, Chit Groups and Custom Ledger entries will appear here live in real-time.",
 
   "accountColDate": "Date",
   "accountColTitle": "Title",
+  "accountColTitleReference": "Title & Reference",
+  "accountColModule": "Module",
   "accountColCategory": "Category",
   "accountColSection": "Section",
   "accountColType": "Type",
   "accountColAmount": "Amount",
   "accountColActions": "Actions",
+  "accountColStatusActions": "Status / Actions",
+
+  "accountFilterModuleLabel": "Filter Module:",
+  "accountModuleAll": "All Modules",
+  "accountModuleLoans": "Loans (கடன்)",
+  "accountModuleFunds": "Funds (சேமிப்பு நிதி)",
+  "accountModuleChit": "Chit Groups (சீட்டு)",
+  "accountModuleCustom": "Custom / Expenses",
+
+  "accountLiveSyncedBadge": "Live Synced",
+  "accountShowingCount": "Showing {start}-{end} of {total} real-time transactions",
+  "@accountShowingCount": {
+    "placeholders": {
+      "start": { "type": "int" },
+      "end": { "type": "int" },
+      "total": { "type": "int" }
+    }
+  },
 
   "accountMissingTitleTitle": "Title Required",
   "accountMissingTitleMessage": "Please enter a title for this entry.",
@@ -1240,6 +1265,14 @@
   "fundSettleUnitsToCloseLabel": "NUMBER OF UNITS TO CLOSE",
   "fundSettleHalfUnitButton": "0.5 Units",
   "fundSettleOneUnitButton": "1 Unit",
+  "fundSettleTwoUnitButton": "2 Units",
+  "fundSettleFiveUnitButton": "5 Units",
+  "fundSettleUnitsInputMaxHint": "Max {maxUnits}",
+  "@fundSettleUnitsInputMaxHint": {
+    "placeholders": {
+      "maxUnits": { "type": "String" }
+    }
+  },
   "fundSettleClosedPayoutLabel": "Closed Units Payout",
   "fundSettleClosedPayoutSubtitle": "Accrued Deposit + Bonus",
   "fundSettleRemainingBalanceLabel": "Remaining Active Balance",
@@ -1259,7 +1292,7 @@
   "fundSettleRemainingTargetLabel": "REMAINING TARGET",
   "fundSettlePaymentMethodLabel": "PAYMENT METHOD",
   "fundSettleSettlementDateLabel": "SETTLEMENT DATE",
-  "fundSettleSummaryClosingTarget": "Closing units deposit target",
+  "fundSettleSummaryClosingTarget": "Closing Deposit Target",
   "fundSettleSummaryClosingTargetValue": "{amount} ({units} of {maxUnits} Units)",
   "@fundSettleSummaryClosingTargetValue": {
     "placeholders": {

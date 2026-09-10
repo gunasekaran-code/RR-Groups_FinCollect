@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../theme/app_theme.dart';
@@ -15,20 +14,28 @@ class AppUpload {
     final XFile? selectedFile = await showModalBottomSheet<XFile?>(
       context: context,
       backgroundColor: AppColors.kSurface,
+      isScrollControlled: true, // 1. Added this to allow dynamic sizing based on content
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) {
         return SafeArea(
           child: Padding(
-            padding: const EdgeInsets.all(20.0),
+            padding: EdgeInsets.only(
+              left: 24.0,
+              right: 24.0,
+              top: 24.0,
+              // 2. Added bottom padding to account for system navigation if SafeArea isn't enough
+              bottom: MediaQuery.of(context).viewInsets.bottom + 24.0,
+            ),
             child: Column(
-              mainAxisSize: MainAxisSize.min,
+              mainAxisSize: MainAxisSize.min, // 3. Ensures it only takes the required height
               children: [
+                // Drag Handle
                 Container(
-                  width: 36,
+                  width: 40,
                   height: 4,
-                  margin: const EdgeInsets.only(bottom: 20),
+                  margin: const EdgeInsets.only(bottom: 24),
                   decoration: BoxDecoration(
                     color: AppColors.kBorder,
                     borderRadius: BorderRadius.circular(2),
@@ -37,20 +44,29 @@ class AppUpload {
                 Text(
                   title,
                   style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
                     color: AppColors.kTextDark,
+                    letterSpacing: -0.5,
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 24),
+                
+                // Camera Option
                 ListTile(
-                  leading: const CircleAvatar(
-                    backgroundColor: AppColors.kGold,
-                    child: Icon(Icons.camera_alt_outlined, color: AppColors.kGold),
+                  contentPadding: EdgeInsets.zero,
+                  leading: CircleAvatar(
+                    radius: 24,
+                    backgroundColor: AppColors.kGold.withValues(alpha: 0.15),
+                    child: const Icon(Icons.photo_camera_rounded, color: AppColors.kGoldDark),
                   ),
                   title: const Text(
                     'Open Camera',
-                    style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.kTextDark),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.kTextDark),
+                  ),
+                  subtitle: const Text(
+                    'Take a new picture',
+                    style: TextStyle(fontSize: 13, color: AppColors.kTextMuted),
                   ),
                   onTap: () async {
                     try {
@@ -71,14 +87,24 @@ class AppUpload {
                     }
                   },
                 ),
+                
+                const SizedBox(height: 8),
+
+                // Gallery Option
                 ListTile(
-                  leading: const CircleAvatar(
-                    backgroundColor: AppColors.kGold,
-                    child: Icon(Icons.photo_library_outlined, color: AppColors.kGold),
+                  contentPadding: EdgeInsets.zero,
+                  leading: CircleAvatar(
+                    radius: 24,
+                    backgroundColor: AppColors.kGold.withValues(alpha: 0.15),
+                    child: const Icon(Icons.image_rounded, color: AppColors.kGoldDark),
                   ),
                   title: const Text(
                     'Upload Image',
-                    style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.kTextDark),
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.kTextDark),
+                  ),
+                  subtitle: const Text(
+                    'Choose from your gallery',
+                    style: TextStyle(fontSize: 13, color: AppColors.kTextMuted),
                   ),
                   onTap: () async {
                     try {
@@ -99,18 +125,21 @@ class AppUpload {
                     }
                   },
                 ),
-                const SizedBox(height: 12),
+                
+                const SizedBox(height: 24),
+                
+                // Cancel Button
                 SizedBox(
                   width: double.infinity,
+                  height: 50,
                   child: OutlinedButton(
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppColors.kTextMuted,
-                      side: const BorderSide(color: AppColors.kBorder),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      side: BorderSide(color: AppColors.kBorder.withValues(alpha: 0.5)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     ),
                     onPressed: () => Navigator.pop(context, null),
-                    child: const Text('Cancel'),
+                    child: const Text('Cancel', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                   ),
                 ),
               ],

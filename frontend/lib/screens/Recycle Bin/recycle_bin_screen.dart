@@ -127,7 +127,7 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
       title: l10n.recycleBinDeletePermanentlyTitle,
       message: 'Are you sure you want to permanently delete "${item.displayTitle}"? This action cannot be undone.',
       confirmLabel: 'Delete',
-      confirmButtonColor: const Color(0xFFE11D48), // Match your red
+      confirmButtonColor: AppColors.kDanger, // Match your red
     );
 
     if (confirmed == true) {
@@ -156,7 +156,7 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
       title: l10n.recycleBinEmptyTitle,
       message: l10n.recycleBinEmptyMessage,
       confirmLabel: 'Empty Trash',
-      confirmButtonColor: const Color(0xFFE11D48),
+      confirmButtonColor: AppColors.kDanger,
     );
 
     if (confirmed == true) {
@@ -227,7 +227,7 @@ class _RecycleBinScreenState extends State<RecycleBinScreen> {
                               icon: const Icon(Icons.delete_outline, size: 18),
                               label: Text(l10n.recycleBinEmptyButton),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFFE11D48), // Rose Red
+                                backgroundColor: AppColors.kDanger,
                                 foregroundColor: Colors.white,
                                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -393,12 +393,12 @@ class _RecycleBinCard extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             decoration: BoxDecoration(
-              color: const Color(0xFFF3E8FF),
+              color: const Color.fromARGB(255, 255, 251, 232),
               borderRadius: BorderRadius.circular(6),
             ),
             child: Text(
               item.formattedTableName,
-              style: const TextStyle(color: Color(0xFF7E22CE), fontSize: 11, fontWeight: FontWeight.w600),
+              style: const TextStyle(color: Color.fromARGB(255, 206, 149, 34), fontSize: 11, fontWeight: FontWeight.w600),
             ),
           ),
           const SizedBox(height: 12),
@@ -466,7 +466,7 @@ class _RecycleBinCard extends StatelessWidget {
                     icon: const Icon(Icons.delete_outline, size: 18),
                     label: const Text('Delete'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFE11D48), // Rose Red
+                      backgroundColor: AppColors.kDanger, 
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       padding: const EdgeInsets.symmetric(vertical: 12),

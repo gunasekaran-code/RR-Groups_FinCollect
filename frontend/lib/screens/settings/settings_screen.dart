@@ -552,7 +552,7 @@ class _SwitchTile extends StatelessWidget {
           ),
           Switch(
             value: value,
-            activeColor: AppColors.kGold, // Color of the toggle when ON
+            activeThumbColor: AppColors.kGold, // Color of the toggle when ON
             activeTrackColor: AppColors.kGold.withOpacity(0.2), // Track color
             onChanged: onChanged,
           ),

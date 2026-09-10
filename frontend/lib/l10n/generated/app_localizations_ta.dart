@@ -157,6 +157,18 @@ class AppLocalizationsTa extends AppLocalizations {
   String get customersFilterInactive => 'செயலற்றது';
 
   @override
+  String get customersStatTotal => 'மொத்த வாடிக்கையாளர்கள்';
+
+  @override
+  String get customersStatActive => 'செயலில் உள்ள வாடிக்கையாளர்கள்';
+
+  @override
+  String get customersStatOverdue => 'காலதாமதமான வாடிக்கையாளர்கள்';
+
+  @override
+  String get customersStatInactive => 'செயலற்ற வாடிக்கையாளர்கள்';
+
+  @override
   String get customersNoResults => 'வாடிக்கையாளர்கள் யாரும் காணப்படவில்லை';
 
   @override
@@ -1890,6 +1902,10 @@ class AppLocalizationsTa extends AppLocalizations {
   String get accountBreakdownChitPending => 'சீட்டு நிலுவை';
 
   @override
+  String get accountBreakdownChitPendingNote =>
+      'வருங்கால உறுப்பினர் பங்களிப்புகள் — இது வழங்கிய கடனாகக் கணக்கிடப்படாது';
+
+  @override
   String get accountBreakdownFundPending => 'நிதி நிலுவை';
 
   @override
@@ -1907,13 +1923,19 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get accountEmptyStateBody =>
-      'உங்கள் கணக்குப் புத்தகத்தைக் கண்காணிக்க உங்கள் முதல் ரொக்க அல்லது கடன் உள்ளீட்டைச் சேர்க்கவும்.';
+      'கடன்கள், வாராந்திர நிதிகள், சீட்டு குழுக்கள் மற்றும் தனிப்பயன் லெட்ஜர் உள்ளீடுகளிலிருந்து அனைத்து வசூல்களும் இங்கே நேரடியாக, நிகழ்நேரத்தில் தோன்றும்.';
 
   @override
   String get accountColDate => 'தேதி';
 
   @override
   String get accountColTitle => 'தலைப்பு';
+
+  @override
+  String get accountColTitleReference => 'தலைப்பு & குறிப்பு';
+
+  @override
+  String get accountColModule => 'தொகுதி';
 
   @override
   String get accountColCategory => 'வகை';
@@ -1929,6 +1951,35 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get accountColActions => 'செயல்கள்';
+
+  @override
+  String get accountColStatusActions => 'நிலை / செயல்கள்';
+
+  @override
+  String get accountFilterModuleLabel => 'தொகுதி வடிகட்டி:';
+
+  @override
+  String get accountModuleAll => 'All Modules';
+
+  @override
+  String get accountModuleLoans => 'Loans (கடன்)';
+
+  @override
+  String get accountModuleFunds => 'Funds (சேமிப்பு நிதி)';
+
+  @override
+  String get accountModuleChit => 'Chit Groups (சீட்டு)';
+
+  @override
+  String get accountModuleCustom => 'Custom / Expenses';
+
+  @override
+  String get accountLiveSyncedBadge => 'நேரடியாக ஒத்திசைக்கப்பட்டது';
+
+  @override
+  String accountShowingCount(int start, int end, int total) {
+    return '$total இல் $start-$end நிகழ்நேர பரிவர்த்தனைகள் காட்டப்படுகின்றன';
+  }
 
   @override
   String get accountMissingTitleTitle => 'தலைப்பு தேவை';
@@ -2657,6 +2708,17 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get fundSettleOneUnitButton => '1 அலகு';
+
+  @override
+  String get fundSettleTwoUnitButton => '2 அலகுகள்';
+
+  @override
+  String get fundSettleFiveUnitButton => '5 அலகுகள்';
+
+  @override
+  String fundSettleUnitsInputMaxHint(String maxUnits) {
+    return 'அதிகபட்சம் $maxUnits';
+  }
 
   @override
   String get fundSettleClosedPayoutLabel => 'மூடப்பட்ட அலகுகளின் செலுத்தம்';

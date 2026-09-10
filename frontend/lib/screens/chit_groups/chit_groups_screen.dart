@@ -16,6 +16,7 @@ import '../../services/session_service.dart';
 import 'chit_passbook_screen.dart';
 import 'package:intl/intl.dart';
 import '../../models/chit_schedule.dart';
+import '../../models/chit_auction.dart';
 import '../../l10n/generated/app_localizations.dart';
 
 // Shared paid/partial/overdue/pending pill styling — used by the Member
@@ -690,7 +691,7 @@ class _ChitGroupsScreenState extends State<ChitGroupsScreen> {
               else
                 ...visibleGroups
                     .map((group) => _buildGroupCard(group))
-                    .toList(),
+                    ,
             ],
           ),
         ),
@@ -1442,10 +1443,12 @@ class _GroupFormSheetState extends State<_GroupFormSheet> {
                               keyboardType: TextInputType.number,
                               decoration: const InputDecoration(isDense: true),
                               validator: (v) {
-                                if (v == null || v.trim().isEmpty)
+                                if (v == null || v.trim().isEmpty) {
                                   return l10n.requiredValidation;
-                                if (int.tryParse(v.trim()) == null)
+                                }
+                                if (int.tryParse(v.trim()) == null) {
                                   return l10n.enterNumberValidation;
+                                }
                                 return null;
                               },
                             ),
@@ -1468,10 +1471,12 @@ class _GroupFormSheetState extends State<_GroupFormSheet> {
                               keyboardType: TextInputType.number,
                               decoration: const InputDecoration(isDense: true),
                               validator: (v) {
-                                if (v == null || v.trim().isEmpty)
+                                if (v == null || v.trim().isEmpty) {
                                   return l10n.requiredValidation;
-                                if (int.tryParse(v.trim()) == null)
+                                }
+                                if (int.tryParse(v.trim()) == null) {
                                   return l10n.enterNumberValidation;
+                                }
                                 return null;
                               },
                             ),
@@ -1492,10 +1497,12 @@ class _GroupFormSheetState extends State<_GroupFormSheet> {
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(isDense: true),
                     validator: (v) {
-                      if (v == null || v.trim().isEmpty)
+                      if (v == null || v.trim().isEmpty) {
                         return l10n.requiredValidation;
-                      if (double.tryParse(v.trim()) == null)
+                      }
+                      if (double.tryParse(v.trim()) == null) {
                         return l10n.enterNumberValidation;
+                      }
                       return null;
                     },
                   ),
@@ -1511,10 +1518,12 @@ class _GroupFormSheetState extends State<_GroupFormSheet> {
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(isDense: true),
                     validator: (v) {
-                      if (v == null || v.trim().isEmpty)
+                      if (v == null || v.trim().isEmpty) {
                         return l10n.requiredValidation;
-                      if (double.tryParse(v.trim()) == null)
+                      }
+                      if (double.tryParse(v.trim()) == null) {
                         return l10n.enterNumberValidation;
+                      }
                       return null;
                     },
                   ),
@@ -1542,7 +1551,7 @@ class _GroupFormSheetState extends State<_GroupFormSheet> {
                           color: AppColors.kTextMuted)),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
-                    value: _drawFrequency,
+                    initialValue: _drawFrequency,
                     isExpanded: true,
                     items: _drawFrequencyOptions
                         .map((f) => DropdownMenuItem(
@@ -1612,7 +1621,7 @@ class _GroupFormSheetState extends State<_GroupFormSheet> {
                           color: AppColors.kTextMuted)),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<ChitGroupStatus>(
-                    value: _status,
+                    initialValue: _status,
                     items: ChitGroupStatus.values
                         .map((status) => DropdownMenuItem(
                               value: status,
@@ -1862,11 +1871,16 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
   String? _loadError;
   bool _changed = false;
 
-  int _activeTab = 0; // 0 = Member Collections, 1 = Installment Schedule
+  int _activeTab =
+      0; // 0 = Member Collections, 1 = Installment Schedule, 2 = Auctions & Settlement
   List<ChitSchedule> _schedules = [];
   Map<int, ChitScheduleStatusSummary> _scheduleStatus = {};
   bool _loadingSchedules = false;
   String? _scheduleLoadError;
+
+  ChitAuctionData? _auctionData;
+  bool _loadingAuctions = false;
+  String? _auctionLoadError;
 
   UserRole? get _role => SessionService.instance.role;
 
@@ -1879,12 +1893,24 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
   bool get _canManageSchedule =>
       _role == UserRole.admin || _role == UserRole.owner;
 
+  /// Recording who won a draw is open to admins and agents alike — the
+  /// same split the backend enforces (ChitActionController only reserves
+  /// settle/reverse/delete for admins).
+  bool get _canRecordWinner =>
+      _role == UserRole.admin || _role == UserRole.owner || _role == UserRole.agent;
+
+  /// Handing over the prize — and undoing that — moves cash, so only an
+  /// admin can do it, matching the 403 the backend would otherwise return.
+  bool get _canSettlePayout =>
+      _role == UserRole.admin || _role == UserRole.owner;
+
   @override
   void initState() {
     super.initState();
     _group = widget.group;
     _loadMembers();
     _loadSchedules();
+    _loadAuctions();
   }
 
   Future<void> _loadSchedules() async {
@@ -1939,6 +1965,145 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
       message: l10n.drawOverriddenMessage(updated.installmentNo),
       type: ToastType.success,
     );
+  }
+
+  Future<void> _loadAuctions() async {
+    setState(() {
+      _loadingAuctions = true;
+      _auctionLoadError = null;
+    });
+    try {
+      final data = await ChitGroupApiService.fetchAuctions(_group.id);
+      if (!mounted) return;
+      setState(() {
+        _auctionData = data;
+        _loadingAuctions = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _auctionLoadError = e.toString();
+        _loadingAuctions = false;
+      });
+    }
+  }
+
+  Future<void> _openRecordWinnerSheet(ChitAuctionDraw draw) async {
+    if (!_canRecordWinner) return; // hard guard, customers never reach here
+    final result = await showModalBottomSheet<ChitAuctionData>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.4),
+      builder: (context) => _RecordAuctionSheet(
+        group: _group,
+        draw: draw,
+        members: _members,
+      ),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      _auctionData = result;
+      _changed = true;
+    });
+    ToastService.show(
+      title: 'Winner recorded',
+      message: 'Draw #${draw.installmentNo} settlement updated',
+      type: ToastType.success,
+    );
+  }
+
+  Future<void> _openPayOutSheet(ChitAuctionDraw draw) async {
+    final auction = draw.auction;
+    if (!_canSettlePayout || auction == null) return;
+    final result = await showModalBottomSheet<ChitAuctionData>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.4),
+      builder: (context) => _PayOutAuctionSheet(draw: draw, auction: auction),
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      _auctionData = result;
+      _changed = true;
+    });
+    ToastService.show(
+      title: 'Payout recorded',
+      message:
+          'Draw #${draw.installmentNo} prize handed over to ${auction.memberName ?? 'the winner'}',
+      type: ToastType.success,
+    );
+  }
+
+  Future<void> _confirmReversePayout(ChitAuctionDraw draw) async {
+    final auction = draw.auction;
+    if (!_canSettlePayout || auction == null) return;
+    final confirmed = await AppConfirmDialog.show(
+      context: context,
+      title: 'Reverse this payout?',
+      message:
+          'This removes the ${formatIndianCurrency(auction.payoutAmount)} cash-out entry for Draw #${draw.installmentNo} and marks the prize unpaid again.',
+      confirmLabel: 'Reverse',
+      confirmButtonColor: AppColors.kDanger,
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final result =
+          await ChitGroupApiService.reverseAuctionPayout(auctionId: auction.id);
+      if (!mounted) return;
+      setState(() {
+        _auctionData = result;
+        _changed = true;
+      });
+      ToastService.show(
+        title: 'Payout reversed',
+        message: 'Draw #${draw.installmentNo} is awaiting payout again',
+        type: ToastType.warning,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ToastService.show(
+        title: 'Could not reverse payout',
+        message: e.toString(),
+        type: ToastType.error,
+      );
+    }
+  }
+
+  Future<void> _confirmDeleteAuction(ChitAuctionDraw draw) async {
+    final auction = draw.auction;
+    if (!_canRecordWinner || auction == null) return;
+    final confirmed = await AppConfirmDialog.show(
+      context: context,
+      title: 'Remove this winner record?',
+      message:
+          'This clears the recorded winner for Draw #${draw.installmentNo}. It only works before the prize is paid out.',
+      confirmLabel: 'Remove',
+      confirmButtonColor: AppColors.kDanger,
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final result =
+          await ChitGroupApiService.deleteAuction(auctionId: auction.id);
+      if (!mounted) return;
+      setState(() {
+        _auctionData = result;
+        _changed = true;
+      });
+      ToastService.show(
+        title: 'Winner record removed',
+        message: 'Draw #${draw.installmentNo} is open again',
+        type: ToastType.warning,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ToastService.show(
+        title: 'Could not remove that record',
+        message: e.toString(),
+        type: ToastType.error,
+      );
+    }
   }
 
   Future<void> _loadMembers() async {
@@ -2100,8 +2265,11 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
       // The draw just paid against changes that draw's payment status (and
       // possibly others, for a lump-sum payment) on the Installment Schedule
       // tab. Reload it now so it's showing current data the moment the user
-      // switches tabs, rather than whatever was last fetched.
+      // switches tabs, rather than whatever was last fetched. The Auctions &
+      // Settlement tab's "collected so far" figure is derived from the same
+      // chit_passbook rows, so it needs the same refresh.
       unawaited(_loadSchedules());
+      unawaited(_loadAuctions());
     } catch (e) {
       if (!mounted) return;
       ToastService.show(
@@ -2265,7 +2433,7 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      _Dot(color: AppColors.kSuccess),
+                      const _Dot(color: AppColors.kSuccess),
                       const SizedBox(width: 8),
                       Text(
                           'Collected ${formatIndianCurrency(_group.collectedAmount)}',
@@ -2278,7 +2446,7 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      _Dot(color: AppColors.kDanger),
+                      const _Dot(color: AppColors.kDanger),
                       const SizedBox(width: 8),
                       Text(
                           'Pending ${formatIndianCurrency(_group.pendingAmount)}',
@@ -2314,6 +2482,14 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
                 selected: _activeTab == 1,
                 onTap: () => setState(() => _activeTab = 1),
               ),
+              const SizedBox(width: 24),
+              _TabButton(
+                icon: Icons.emoji_events_outlined,
+                label:
+                    'Auctions & Settlement (${_auctionData?.summary.totalDraws ?? _schedules.length})',
+                selected: _activeTab == 2,
+                onTap: () => setState(() => _activeTab = 2),
+              ),
             ],
           ),
         ),
@@ -2322,8 +2498,10 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
 
         if (_activeTab == 0)
           _buildMemberSection(l10n)
+        else if (_activeTab == 1)
+          _buildScheduleSection(l10n)
         else
-          _buildScheduleSection(l10n),
+          _buildAuctionSection(l10n),
       ],
     );
   }
@@ -2612,6 +2790,90 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
       ],
     );
   }
+
+  Widget _buildAuctionSection(AppLocalizations l10n) {
+    final data = _auctionData;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Auctions & Settlement',
+            style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 16,
+                color: AppColors.kTextDark)),
+        const SizedBox(height: 4),
+        const Text(
+          'Record who won each draw and hand the prize over — the money '
+          'moves through the group\'s cash book the moment you pay it out.',
+          style: TextStyle(
+              color: AppColors.kTextMuted, fontSize: 13, height: 1.4),
+        ),
+        const SizedBox(height: 16),
+        if (_loadingAuctions)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_auctionLoadError != null)
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEF2F2),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              children: [
+                Text(_auctionLoadError!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: AppColors.kDanger)),
+                const SizedBox(height: 12),
+                ElevatedButton(
+                    onPressed: _loadAuctions,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.kDanger,
+                      foregroundColor: Colors.white,
+                    ),
+                    child: Text(l10n.retryButton)),
+              ],
+            ),
+          )
+        else if (data == null || data.draws.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(
+              child: Text('No draw schedule available yet.',
+                  style: TextStyle(color: AppColors.kTextMuted, fontSize: 15)),
+            ),
+          )
+        else ...[
+          _AuctionSummaryStrip(summary: data.summary),
+          const SizedBox(height: 20),
+          LayoutBuilder(builder: (context, constraints) {
+            final mobile = constraints.maxWidth < _kAuctionMobileBreakpoint;
+            return mobile
+                ? _AuctionCardList(
+                    draws: data.draws,
+                    canRecordWinner: _canRecordWinner,
+                    canSettlePayout: _canSettlePayout,
+                    onRecordWinner: _openRecordWinnerSheet,
+                    onPayOut: _openPayOutSheet,
+                    onReverse: _confirmReversePayout,
+                    onDelete: _confirmDeleteAuction,
+                  )
+                : _AuctionTable(
+                    draws: data.draws,
+                    canRecordWinner: _canRecordWinner,
+                    canSettlePayout: _canSettlePayout,
+                    onRecordWinner: _openRecordWinnerSheet,
+                    onPayOut: _openPayOutSheet,
+                    onReverse: _confirmReversePayout,
+                    onDelete: _confirmDeleteAuction,
+                  );
+          }),
+        ],
+      ],
+    );
+  }
 }
 
 class _DetailStat extends StatelessWidget {
@@ -2833,7 +3095,7 @@ class _ChitCollectionSheetState extends State<_ChitCollectionSheet> {
                         children: [
                           _label(l10n.paymentMethodLabel, required: true),
                           DropdownButtonFormField<String>(
-                            value: _method,
+                            initialValue: _method,
                             decoration: _decoration(l10n.selectMethodHint),
                             items: _methods
                                 .map((method) => DropdownMenuItem(
@@ -3474,7 +3736,7 @@ class _AddMemberFrameState extends State<_AddMemberFrame> {
                               ],
                             )
                           : DropdownButtonFormField<ChitCustomerOption>(
-                              value: _selectedCustomer,
+                              initialValue: _selectedCustomer,
                               isExpanded: true,
                               decoration: const InputDecoration(isDense: true),
                               hint: Text(l10n.selectCustomerHint),
@@ -3523,10 +3785,12 @@ class _AddMemberFrameState extends State<_AddMemberFrame> {
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     decoration: const InputDecoration(isDense: true),
                     validator: (v) {
-                      if (v == null || v.trim().isEmpty)
+                      if (v == null || v.trim().isEmpty) {
                         return l10n.requiredValidation;
-                      if (num.tryParse(v) == null)
+                      }
+                      if (num.tryParse(v) == null) {
                         return l10n.enterValidNumberValidation;
+                      }
                       return null;
                     },
                   ),
@@ -3562,6 +3826,1346 @@ class _AddMemberFrameState extends State<_AddMemberFrame> {
                   ),
                 ],
               ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// ============================================================================
+/// AUCTIONS & SETTLEMENT — draw sheet: who won, discount, payout, dividend.
+/// ============================================================================
+
+// Below this width the 9-column draw sheet stops fitting a table row
+// legibly and switches to a stacked card per draw, same idea as the
+// passbook screen's own mobile breakpoint.
+const double _kAuctionMobileBreakpoint = 760;
+
+String _auctionStatusLabel(ChitAuctionStatus status) {
+  switch (status) {
+    case ChitAuctionStatus.settled:
+      return 'Paid Out';
+    case ChitAuctionStatus.won:
+      return 'Awaiting Payout';
+    case ChitAuctionStatus.open:
+      return 'Not Drawn';
+  }
+}
+
+Color _auctionStatusForeground(ChitAuctionStatus status) {
+  switch (status) {
+    case ChitAuctionStatus.settled:
+      return AppColors.kSuccess;
+    case ChitAuctionStatus.won:
+      return AppColors.kWarning;
+    case ChitAuctionStatus.open:
+      return AppColors.kTextMuted;
+  }
+}
+
+Color _auctionStatusBackground(ChitAuctionStatus status) {
+  switch (status) {
+    case ChitAuctionStatus.settled:
+      return const Color(0xFFD1FAE5);
+    case ChitAuctionStatus.won:
+      return const Color(0xFFFEF3C7);
+    case ChitAuctionStatus.open:
+      return const Color(0xFFF1F5F9);
+  }
+}
+
+const _auctionLabelStyle = TextStyle(
+    fontSize: 12,
+    fontWeight: FontWeight.bold,
+    letterSpacing: 0.5,
+    color: AppColors.kTextMuted);
+
+InputDecoration _auctionFieldDecoration({String? hint, Widget? suffixIcon}) {
+  return InputDecoration(
+    hintText: hint,
+    isDense: true,
+    filled: true,
+    fillColor: const Color(0xFFF8FAFC),
+    contentPadding:
+        const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+    suffixIcon: suffixIcon,
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: AppColors.kGold, width: 1.5),
+    ),
+  );
+}
+
+class _AuctionHCell extends StatelessWidget {
+  const _AuctionHCell(this.label, {required this.flex});
+  final String label;
+  final int flex;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      flex: flex,
+      child: Text(label,
+          style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: AppColors.kTextMuted)),
+    );
+  }
+}
+
+class _AuctionStatusPill extends StatelessWidget {
+  const _AuctionStatusPill({required this.status});
+  final ChitAuctionStatus status;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: _auctionStatusBackground(status),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        _auctionStatusLabel(status),
+        style: TextStyle(
+            color: _auctionStatusForeground(status),
+            fontSize: 11,
+            fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+}
+
+/// ---- summary strip ----
+class _AuctionSummaryStrip extends StatelessWidget {
+  const _AuctionSummaryStrip({required this.summary});
+  final ChitAuctionGroupSummary summary;
+
+  @override
+  Widget build(BuildContext context) {
+    final drawsHeld = summary.won + summary.settled;
+    final stats = <Widget>[
+      _AuctionStatCard(
+          label: 'Draws Held', value: '$drawsHeld / ${summary.totalDraws}'),
+      _AuctionStatCard(
+          label: 'Paid Out',
+          value: formatIndianCurrency(summary.paidOut),
+          color: AppColors.kSuccess),
+      _AuctionStatCard(
+          label: 'Awaiting Payout',
+          value: formatIndianCurrency(summary.pendingPayout),
+          color: AppColors.kWarning),
+      _AuctionStatCard(
+          label: 'Dividend Shared',
+          value: formatIndianCurrency(summary.dividendTotal),
+          color: const Color(0xFF4C1D95)),
+    ];
+    return LayoutBuilder(builder: (context, constraints) {
+      final perRow = constraints.maxWidth < 480 ? 2 : 4;
+      final gap = 12.0 * (perRow - 1);
+      final width = (constraints.maxWidth - gap) / perRow;
+      return Wrap(
+        spacing: 12,
+        runSpacing: 12,
+        children:
+            stats.map((s) => SizedBox(width: width, child: s)).toList(),
+      );
+    });
+  }
+}
+
+class _AuctionStatCard extends StatelessWidget {
+  const _AuctionStatCard(
+      {required this.label, required this.value, this.color});
+  final String label;
+  final String value;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: const TextStyle(
+                  color: AppColors.kTextMuted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          Text(value,
+              style: TextStyle(
+                  color: color ?? AppColors.kTextDark,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 17)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Shared logic for what the ACTION column/card shows for one draw — record
+/// a winner, edit/pay one out, or reverse a completed payout — gated the
+/// same way the backend gates the underlying requests (ChitActionController:
+/// record_auction is admin+agent, settle/reverse/delete are admin-only).
+List<Widget> _auctionActions({
+  required ChitAuctionDraw draw,
+  required bool canRecordWinner,
+  required bool canSettlePayout,
+  required ValueChanged<ChitAuctionDraw> onRecordWinner,
+  required ValueChanged<ChitAuctionDraw> onPayOut,
+  required ValueChanged<ChitAuctionDraw> onReverse,
+  required ValueChanged<ChitAuctionDraw> onDelete,
+}) {
+  if (draw.status == ChitAuctionStatus.open) {
+    if (!canRecordWinner) {
+      return [
+        const Text('—', style: TextStyle(color: AppColors.kTextMuted)),
+      ];
+    }
+    return [
+      TextButton.icon(
+        onPressed: () => onRecordWinner(draw),
+        style: TextButton.styleFrom(
+            foregroundColor: const Color(0xFF7C3AED),
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            minimumSize: const Size(0, 0),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+        icon: const Icon(Icons.auto_fix_high, size: 15),
+        label: const Text('Record Winner',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+      ),
+    ];
+  }
+
+  if (draw.status == ChitAuctionStatus.won) {
+    return [
+      if (canRecordWinner)
+        TextButton.icon(
+          onPressed: () => onRecordWinner(draw),
+          style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF7C3AED),
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              minimumSize: const Size(0, 0),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+          icon: const Icon(Icons.edit_outlined, size: 15),
+          label: const Text('Edit', style: TextStyle(fontSize: 12)),
+        ),
+      if (canSettlePayout)
+        TextButton.icon(
+          onPressed: () => onPayOut(draw),
+          style: TextButton.styleFrom(
+              foregroundColor: AppColors.kSuccess,
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              minimumSize: const Size(0, 0),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+          icon: const Icon(Icons.payments_outlined, size: 15),
+          label: const Text('Pay Out',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+        ),
+      if (canRecordWinner)
+        IconButton(
+          icon: const Icon(Icons.close, size: 16, color: AppColors.kDanger),
+          tooltip: 'Remove winner record',
+          onPressed: () => onDelete(draw),
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(),
+        ),
+    ];
+  }
+
+  // settled — the prize has already been paid out.
+  if (!canSettlePayout) {
+    return [
+      const Text('Paid',
+          style: TextStyle(
+              color: AppColors.kSuccess,
+              fontWeight: FontWeight.w600,
+              fontSize: 12)),
+    ];
+  }
+  return [
+    TextButton.icon(
+      onPressed: () => onReverse(draw),
+      style: TextButton.styleFrom(
+          foregroundColor: AppColors.kDanger,
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          minimumSize: const Size(0, 0),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+      icon: const Icon(Icons.undo, size: 15),
+      label: const Text('Reverse', style: TextStyle(fontSize: 12)),
+    ),
+  ];
+}
+
+/// ---- wide-screen table ----
+class _AuctionTable extends StatelessWidget {
+  const _AuctionTable({
+    required this.draws,
+    required this.canRecordWinner,
+    required this.canSettlePayout,
+    required this.onRecordWinner,
+    required this.onPayOut,
+    required this.onReverse,
+    required this.onDelete,
+  });
+
+  final List<ChitAuctionDraw> draws;
+  final bool canRecordWinner;
+  final bool canSettlePayout;
+  final ValueChanged<ChitAuctionDraw> onRecordWinner;
+  final ValueChanged<ChitAuctionDraw> onPayOut;
+  final ValueChanged<ChitAuctionDraw> onReverse;
+  final ValueChanged<ChitAuctionDraw> onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      return SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: ConstrainedBox(
+          constraints: BoxConstraints.tightFor(
+              width: constraints.maxWidth > 1040 ? constraints.maxWidth : 1040),
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: AppColors.kBorder),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Column(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 12),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFF6F5F1),
+                    borderRadius:
+                        BorderRadius.vertical(top: Radius.circular(14)),
+                  ),
+                  child: const Row(
+                    children: [
+                      _AuctionHCell('DRAW #', flex: 1),
+                      _AuctionHCell('DATE', flex: 2),
+                      _AuctionHCell('POOL', flex: 2),
+                      _AuctionHCell('WINNER', flex: 3),
+                      _AuctionHCell('DISCOUNT', flex: 2),
+                      _AuctionHCell('PAYOUT', flex: 2),
+                      _AuctionHCell('DIVIDEND', flex: 2),
+                      _AuctionHCell('STATUS', flex: 2),
+                      _AuctionHCell('ACTION', flex: 3),
+                    ],
+                  ),
+                ),
+                ...draws.map((d) => _AuctionRow(
+                      draw: d,
+                      canRecordWinner: canRecordWinner,
+                      canSettlePayout: canSettlePayout,
+                      onRecordWinner: onRecordWinner,
+                      onPayOut: onPayOut,
+                      onReverse: onReverse,
+                      onDelete: onDelete,
+                    )),
+              ],
+            ),
+          ),
+        ),
+      );
+    });
+  }
+}
+
+class _AuctionRow extends StatelessWidget {
+  const _AuctionRow({
+    required this.draw,
+    required this.canRecordWinner,
+    required this.canSettlePayout,
+    required this.onRecordWinner,
+    required this.onPayOut,
+    required this.onReverse,
+    required this.onDelete,
+  });
+
+  final ChitAuctionDraw draw;
+  final bool canRecordWinner;
+  final bool canSettlePayout;
+  final ValueChanged<ChitAuctionDraw> onRecordWinner;
+  final ValueChanged<ChitAuctionDraw> onPayOut;
+  final ValueChanged<ChitAuctionDraw> onReverse;
+  final ValueChanged<ChitAuctionDraw> onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final auction = draw.auction;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: AppColors.kBorder)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 1,
+            child: Text('#${draw.installmentNo}',
+                style: const TextStyle(
+                    fontWeight: FontWeight.bold, fontSize: 13)),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(formatDate(auction?.auctionDate ?? draw.dueDate)),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(formatIndianCurrency(draw.poolAmount),
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+          ),
+          Expanded(
+            flex: 3,
+            child: auction?.memberName == null
+                ? const Text('—', style: TextStyle(color: AppColors.kTextMuted))
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.emoji_events,
+                          size: 15, color: Color(0xFFCA8A04)),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(auction!.memberName!,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w600)),
+                      ),
+                    ],
+                  ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+                auction == null ? '—' : formatIndianCurrency(auction.bidAmount)),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+                auction == null
+                    ? '—'
+                    : formatIndianCurrency(auction.payoutAmount),
+                style: const TextStyle(fontWeight: FontWeight.w700)),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+                auction == null
+                    ? '—'
+                    : formatIndianCurrency(auction.dividendTotal),
+                style: const TextStyle(color: Color(0xFF4C1D95))),
+          ),
+          Expanded(
+            flex: 2,
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _AuctionStatusPill(status: draw.status),
+            ),
+          ),
+          Expanded(
+            flex: 3,
+            child: Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              children: _auctionActions(
+                draw: draw,
+                canRecordWinner: canRecordWinner,
+                canSettlePayout: canSettlePayout,
+                onRecordWinner: onRecordWinner,
+                onPayOut: onPayOut,
+                onReverse: onReverse,
+                onDelete: onDelete,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// ---- narrow-screen cards ----
+class _AuctionCardList extends StatelessWidget {
+  const _AuctionCardList({
+    required this.draws,
+    required this.canRecordWinner,
+    required this.canSettlePayout,
+    required this.onRecordWinner,
+    required this.onPayOut,
+    required this.onReverse,
+    required this.onDelete,
+  });
+
+  final List<ChitAuctionDraw> draws;
+  final bool canRecordWinner;
+  final bool canSettlePayout;
+  final ValueChanged<ChitAuctionDraw> onRecordWinner;
+  final ValueChanged<ChitAuctionDraw> onPayOut;
+  final ValueChanged<ChitAuctionDraw> onReverse;
+  final ValueChanged<ChitAuctionDraw> onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: draws
+          .map((d) => _AuctionCard(
+                draw: d,
+                canRecordWinner: canRecordWinner,
+                canSettlePayout: canSettlePayout,
+                onRecordWinner: onRecordWinner,
+                onPayOut: onPayOut,
+                onReverse: onReverse,
+                onDelete: onDelete,
+              ))
+          .toList(),
+    );
+  }
+}
+
+class _AuctionCard extends StatelessWidget {
+  const _AuctionCard({
+    required this.draw,
+    required this.canRecordWinner,
+    required this.canSettlePayout,
+    required this.onRecordWinner,
+    required this.onPayOut,
+    required this.onReverse,
+    required this.onDelete,
+  });
+
+  final ChitAuctionDraw draw;
+  final bool canRecordWinner;
+  final bool canSettlePayout;
+  final ValueChanged<ChitAuctionDraw> onRecordWinner;
+  final ValueChanged<ChitAuctionDraw> onPayOut;
+  final ValueChanged<ChitAuctionDraw> onReverse;
+  final ValueChanged<ChitAuctionDraw> onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final auction = draw.auction;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.kBorder),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Draw #${draw.installmentNo}',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              _AuctionStatusPill(status: draw.status),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(formatDate(auction?.auctionDate ?? draw.dueDate),
+              style:
+                  const TextStyle(color: AppColors.kTextMuted, fontSize: 12)),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _AuctionMiniStat(
+                    label: 'Pool',
+                    value: formatIndianCurrency(draw.poolAmount)),
+              ),
+              Expanded(
+                child: _AuctionMiniStat(
+                  label: 'Winner',
+                  value: auction?.memberName ?? 'Not drawn yet',
+                  color: auction?.memberName == null
+                      ? AppColors.kTextMuted
+                      : AppColors.kTextDark,
+                ),
+              ),
+            ],
+          ),
+          if (auction != null) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: _AuctionMiniStat(
+                      label: 'Discount',
+                      value: formatIndianCurrency(auction.bidAmount)),
+                ),
+                Expanded(
+                  child: _AuctionMiniStat(
+                      label: 'Payout',
+                      value: formatIndianCurrency(auction.payoutAmount),
+                      color: AppColors.kSuccess),
+                ),
+                Expanded(
+                  child: _AuctionMiniStat(
+                      label: 'Dividend',
+                      value: formatIndianCurrency(auction.dividendTotal),
+                      color: const Color(0xFF4C1D95)),
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              children: _auctionActions(
+                draw: draw,
+                canRecordWinner: canRecordWinner,
+                canSettlePayout: canSettlePayout,
+                onRecordWinner: onRecordWinner,
+                onPayOut: onPayOut,
+                onReverse: onReverse,
+                onDelete: onDelete,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AuctionMiniStat extends StatelessWidget {
+  const _AuctionMiniStat({required this.label, required this.value, this.color});
+  final String label;
+  final String value;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: const TextStyle(color: AppColors.kTextMuted, fontSize: 11)),
+        const SizedBox(height: 2),
+        Text(value,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+                color: color ?? AppColors.kTextDark,
+                fontWeight: FontWeight.w600,
+                fontSize: 13)),
+      ],
+    );
+  }
+}
+
+/// ---- record / edit a draw's winner ----
+class _RecordAuctionSheet extends StatefulWidget {
+  const _RecordAuctionSheet({
+    required this.group,
+    required this.draw,
+    required this.members,
+  });
+
+  final ChitGroup group;
+  final ChitAuctionDraw draw;
+  final List<ChitMember> members;
+
+  @override
+  State<_RecordAuctionSheet> createState() => _RecordAuctionSheetState();
+}
+
+class _RecordAuctionSheetState extends State<_RecordAuctionSheet> {
+  String? _memberId;
+  late final TextEditingController _bidCtrl;
+  late final TextEditingController _commissionCtrl;
+  late final TextEditingController _notesCtrl;
+  late DateTime _auctionDate;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final existing = widget.draw.auction;
+    _memberId = existing?.memberId;
+    _bidCtrl = TextEditingController(
+        text: existing != null && existing.bidAmount > 0
+            ? existing.bidAmount.toStringAsFixed(0)
+            : '');
+    _commissionCtrl = TextEditingController(
+        text: existing != null && existing.commission > 0
+            ? existing.commission.toStringAsFixed(0)
+            : '');
+    _notesCtrl = TextEditingController(text: existing?.notes ?? '');
+    _auctionDate = existing?.auctionDate ?? DateTime.now();
+    _bidCtrl.addListener(_recalc);
+    _commissionCtrl.addListener(_recalc);
+  }
+
+  void _recalc() => setState(() {});
+
+  @override
+  void dispose() {
+    _bidCtrl.removeListener(_recalc);
+    _commissionCtrl.removeListener(_recalc);
+    _bidCtrl.dispose();
+    _commissionCtrl.dispose();
+    _notesCtrl.dispose();
+    super.dispose();
+  }
+
+  double get _pool => widget.draw.poolAmount;
+  double get _bid => double.tryParse(_bidCtrl.text.trim()) ?? 0;
+  double get _commission => double.tryParse(_commissionCtrl.text.trim()) ?? 0;
+  double get _winnerReceives => (_pool - _bid).clamp(0, double.infinity);
+  double get _dividendShare => (_bid - _commission).clamp(0, double.infinity);
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _auctionDate,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (picked != null && mounted) setState(() => _auctionDate = picked);
+  }
+
+  Future<void> _save() async {
+    if (_memberId == null || _memberId!.isEmpty) {
+      setState(() => _error = 'Choose who won this draw.');
+      return;
+    }
+    if (_bid > _pool) {
+      setState(() =>
+          _error = 'The discount cannot be more than the pool of ${formatIndianCurrency(_pool)}');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final result = await ChitGroupApiService.recordAuctionWinner(
+        groupId: widget.group.id,
+        installmentNo: widget.draw.installmentNo,
+        memberId: _memberId!,
+        bidAmount: _bid,
+        commission: _commission,
+        auctionDate: _auctionDate,
+        notes: _notesCtrl.text,
+      );
+      if (mounted) Navigator.of(context).pop(result);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final isEditing = widget.draw.auction != null;
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: AppColors.kSurface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Draw #${widget.draw.installmentNo} — ${isEditing ? 'Edit Winner' : 'Record Winner'}',
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
+                          color: AppColors.kTextDark,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: IconButton.styleFrom(
+                          backgroundColor: const Color(0xFFF1F5F9)),
+                      icon: const Icon(Icons.close,
+                          size: 20, color: AppColors.kTextDark),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF1EEFC),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text.rich(
+                    TextSpan(
+                      style: const TextStyle(
+                          color: Color(0xFF4C1D95), fontSize: 13),
+                      children: [
+                        const TextSpan(text: 'Pool for this draw: '),
+                        TextSpan(
+                            text: formatIndianCurrency(_pool),
+                            style: const TextStyle(fontWeight: FontWeight.w800)),
+                        const TextSpan(text: ' · collected so far '),
+                        TextSpan(
+                            text: formatIndianCurrency(widget.draw.collected),
+                            style: const TextStyle(fontWeight: FontWeight.w800)),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Text.rich(TextSpan(
+                  text: 'WINNER',
+                  style: _auctionLabelStyle,
+                  children: [
+                    TextSpan(text: ' *', style: TextStyle(color: AppColors.kDanger)),
+                  ],
+                )),
+                const SizedBox(height: 8),
+                DropdownButtonFormField<String>(
+                  initialValue: widget.members.any((m) => m.id == _memberId)
+                      ? _memberId
+                      : null,
+                  isExpanded: true,
+                  hint: const Text('Select a member…'),
+                  decoration: _auctionFieldDecoration(),
+                  items: widget.members
+                      .map((m) => DropdownMenuItem(
+                            value: m.id,
+                            child:
+                                Text(m.memberName, overflow: TextOverflow.ellipsis),
+                          ))
+                      .toList(),
+                  onChanged: (v) => setState(() => _memberId = v),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('DISCOUNT / BID (₹)', style: _auctionLabelStyle),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _bidCtrl,
+                            keyboardType: TextInputType.number,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly
+                            ],
+                            decoration: _auctionFieldDecoration(hint: '0'),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text('Leave blank for a fixed-payout scheme',
+                              style: TextStyle(
+                                  color: AppColors.kTextMuted, fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('COMMISSION (₹)', style: _auctionLabelStyle),
+                          const SizedBox(height: 8),
+                          TextField(
+                            controller: _commissionCtrl,
+                            keyboardType: TextInputType.number,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly
+                            ],
+                            decoration: _auctionFieldDecoration(hint: '0'),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text('Taken out of the discount',
+                              style: TextStyle(
+                                  color: AppColors.kTextMuted, fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                const Text('AUCTION DATE', style: _auctionLabelStyle),
+                const SizedBox(height: 8),
+                InkWell(
+                  onTap: _pickDate,
+                  borderRadius: BorderRadius.circular(12),
+                  child: InputDecorator(
+                    decoration: _auctionFieldDecoration(
+                      suffixIcon: const Icon(Icons.calendar_today_outlined,
+                          color: AppColors.kTextMuted, size: 18),
+                    ),
+                    child: Text(formatDate(_auctionDate),
+                        style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w500,
+                            color: AppColors.kTextDark)),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFECFDF5),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('WINNER RECEIVES',
+                                style: TextStyle(
+                                    color: AppColors.kSuccess,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            Text(formatIndianCurrency(_winnerReceives),
+                                style: const TextStyle(
+                                    color: AppColors.kSuccess,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 18)),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF7E0),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('DIVIDEND TO SHARE',
+                                style: TextStyle(
+                                    color: Color(0xFFB45309),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            Text(formatIndianCurrency(_dividendShare),
+                                style: const TextStyle(
+                                    color: Color(0xFFB45309),
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 18)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                const Text('NOTES', style: _auctionLabelStyle),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _notesCtrl,
+                  maxLines: 2,
+                  decoration: _auctionFieldDecoration(hint: 'Optional'),
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'Recording the winner does not move money. Use Pay Out when '
+                  'the prize is actually handed over.',
+                  style: TextStyle(color: AppColors.kTextMuted, fontSize: 12),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(_error!,
+                      style: const TextStyle(
+                          color: AppColors.kDanger, fontSize: 13)),
+                ],
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed:
+                            _saving ? null : () => Navigator.of(context).pop(),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14)),
+                          side: const BorderSide(color: Color(0xFFE2E8F0)),
+                        ),
+                        child: const Text('Cancel',
+                            style: TextStyle(fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: ElevatedButton.icon(
+                        onPressed: _saving ? null : _save,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.kGold,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14)),
+                        ),
+                        icon: _saving
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    color: Colors.white, strokeWidth: 2))
+                            : const Icon(Icons.emoji_events_outlined, size: 20),
+                        label: Text(
+                          _saving ? 'Saving…' : 'Save Winner',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// ---- pay a recorded winner out (admin) ----
+class _PayOutAuctionSheet extends StatefulWidget {
+  const _PayOutAuctionSheet({required this.draw, required this.auction});
+
+  final ChitAuctionDraw draw;
+  final ChitAuctionRecord auction;
+
+  @override
+  State<_PayOutAuctionSheet> createState() => _PayOutAuctionSheetState();
+}
+
+class _PayOutAuctionSheetState extends State<_PayOutAuctionSheet> {
+  String _method = 'Cash';
+  DateTime _date = DateTime.now();
+  final _notesCtrl = TextEditingController();
+  bool _saving = false;
+  String? _error;
+
+  static const _methods = ['Cash', 'UPI', 'Bank Transfer', 'Cheque', 'Card'];
+  static const _methodValues = {
+    'Cash': 'cash',
+    'UPI': 'upi',
+    'Bank Transfer': 'bank',
+    'Cheque': 'cheque',
+    'Card': 'card',
+  };
+
+  @override
+  void dispose() {
+    _notesCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked != null && mounted) setState(() => _date = picked);
+  }
+
+  Future<void> _confirm() async {
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final result = await ChitGroupApiService.settleAuctionPayout(
+        auctionId: widget.auction.id,
+        paymentMethod: _methodValues[_method]!,
+        payoutDate: _date,
+        notes: _notesCtrl.text,
+      );
+      if (mounted) Navigator.of(context).pop(result);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = e.toString();
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final shortfall = widget.draw.collected < widget.auction.payoutAmount;
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: AppColors.kSurface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Draw #${widget.draw.installmentNo} — Pay Out',
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
+                          color: AppColors.kTextDark,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: IconButton.styleFrom(
+                          backgroundColor: const Color(0xFFF1F5F9)),
+                      icon: const Icon(Icons.close,
+                          size: 20, color: AppColors.kTextDark),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFECFDF5),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Column(
+                    children: [
+                      const Text('PAYING TO',
+                          style: TextStyle(
+                              color: AppColors.kSuccess,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 11,
+                              letterSpacing: 0.5)),
+                      const SizedBox(height: 6),
+                      Text(widget.auction.memberName ?? 'Winner',
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 16,
+                              color: AppColors.kTextDark)),
+                      const SizedBox(height: 6),
+                      Text(formatIndianCurrency(widget.auction.payoutAmount),
+                          style: const TextStyle(
+                              color: AppColors.kSuccess,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 24)),
+                    ],
+                  ),
+                ),
+                if (shortfall) ...[
+                  const SizedBox(height: 14),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF7E0),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFFCE3A6)),
+                    ),
+                    child: Text(
+                      'Only ${formatIndianCurrency(widget.draw.collected)} has been '
+                      "collected towards this draw. The remainder comes out of the "
+                      "group's other funds.",
+                      style: const TextStyle(
+                          color: Color(0xFFB45309), fontSize: 12.5, height: 1.4),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 22),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text.rich(TextSpan(
+                            text: 'METHOD',
+                            style: _auctionLabelStyle,
+                            children: [
+                              TextSpan(
+                                  text: ' *',
+                                  style: TextStyle(color: AppColors.kDanger)),
+                            ],
+                          )),
+                          const SizedBox(height: 8),
+                          DropdownButtonFormField<String>(
+                            initialValue: _method,
+                            isExpanded: true,
+                            decoration: _auctionFieldDecoration(),
+                            items: _methods
+                                .map((m) =>
+                                    DropdownMenuItem(value: m, child: Text(m)))
+                                .toList(),
+                            onChanged: (v) =>
+                                setState(() => _method = v ?? 'Cash'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text.rich(TextSpan(
+                            text: 'PAYOUT DATE',
+                            style: _auctionLabelStyle,
+                            children: [
+                              TextSpan(
+                                  text: ' *',
+                                  style: TextStyle(color: AppColors.kDanger)),
+                            ],
+                          )),
+                          const SizedBox(height: 8),
+                          InkWell(
+                            onTap: _pickDate,
+                            borderRadius: BorderRadius.circular(12),
+                            child: InputDecorator(
+                              decoration: _auctionFieldDecoration(
+                                suffixIcon: const Icon(
+                                    Icons.calendar_today_outlined,
+                                    color: AppColors.kTextMuted,
+                                    size: 18),
+                              ),
+                              child: Text(formatDate(_date),
+                                  style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                      color: AppColors.kTextDark)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                const Text('NOTES', style: _auctionLabelStyle),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _notesCtrl,
+                  maxLines: 2,
+                  decoration: _auctionFieldDecoration(hint: 'Optional'),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  'This writes a cash-book entry, so Cash In Hand drops by '
+                  '${formatIndianCurrency(widget.auction.payoutAmount)} straight away.',
+                  style: const TextStyle(
+                      color: AppColors.kTextMuted, fontSize: 12, height: 1.4),
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(_error!,
+                      style: const TextStyle(
+                          color: AppColors.kDanger, fontSize: 13)),
+                ],
+                const SizedBox(height: 24),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed:
+                            _saving ? null : () => Navigator.of(context).pop(),
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14)),
+                          side: const BorderSide(color: Color(0xFFE2E8F0)),
+                        ),
+                        child: const Text('Cancel',
+                            style: TextStyle(fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: ElevatedButton.icon(
+                        onPressed: _saving ? null : _confirm,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.kGold,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14)),
+                        ),
+                        icon: _saving
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    color: Colors.white, strokeWidth: 2))
+                            : const Icon(Icons.payments_outlined, size: 20),
+                        label: Text(
+                          _saving ? 'Paying…' : 'Confirm Payout',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         ),

@@ -5,7 +5,7 @@ import '../../services/user_api_service.dart';
 import '../../models/user_account.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/glass_toast.dart';
-import '../../theme/edit_dialog.dart'; // Imported for future/shared styling context
+// Imported for future/shared styling context
 import '../../widgets/app_shell.dart';
 import '../../widgets/status_badge.dart';
 import '../../l10n/generated/app_localizations.dart';
@@ -611,7 +611,7 @@ class _AddUserDialogContentState extends State<_AddUserDialogContent> {
   // locale-independent; only the dropdown display text is localized.
   String _role = 'agent';
   String _status = 'active';
-  bool _submitting = false;
+  final bool _submitting = false;
   String? _formError;
 
   bool get _isEdit => widget.existing != null;

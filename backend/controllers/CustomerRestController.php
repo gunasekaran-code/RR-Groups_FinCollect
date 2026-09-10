@@ -15,6 +15,21 @@
 
 class CustomerRestController extends ResourceController
 {
+    /**
+     * The only customer columns an agent may write.
+     *
+     * An agent works in the field: the Visit button pins a customer's location,
+     * and KYC documents are photographed at the door. Everything that
+     * identifies the customer — their name, Aadhaar and PAN numbers, and above
+     * all which agent they belong to — stays with an admin. The rule was
+     * written down at the top of this file long before it was enforced, so an
+     * agent could in fact reassign a customer to themselves through rest.php.
+     */
+    private const AGENT_WRITABLE = [
+        'latitude', 'longitude',
+        'photo_url', 'aadhaar_front_url', 'aadhaar_back_url', 'pan_url', 'signature_url',
+    ];
+
     public function handle(): void
     {
         $claims = $this->requireAuth();
@@ -33,10 +48,27 @@ class CustomerRestController extends ResourceController
             if ($method === 'DELETE' && $role !== 'admin') {
                 json_error('Only admins can delete customers', 403);
             }
+            // Creating a customer with its linked login belongs to
+            // customers.php; POST here is the admin-only safety net.
+            if ($method === 'POST' && $role !== 'admin') {
+                json_error('Only admins can create customers', 403);
+            }
         }
 
         if ($method === 'PATCH' || $method === 'PUT') {
             $b = $this->body();
+
+            if ($role === 'agent') {
+                $refused = array_values(array_diff(array_keys($b), self::AGENT_WRITABLE));
+                if ($refused) {
+                    json_error(
+                        'Agents can only update a customer\'s location and KYC documents. Refused: '
+                        . implode(', ', $refused),
+                        403
+                    );
+                }
+            }
+
             if (array_key_exists('assigned_agent', $b)) {
                 [$where, $binds] = QueryParser::where(Customer::columns());
                 if ($where !== '') {

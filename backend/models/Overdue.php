@@ -41,7 +41,13 @@ class Overdue extends Model
      * Live list of overdue accounts with days-overdue and the outstanding
      * past-due amount, joined to customer contact details. Newest-overdue first.
      */
-    public static function accounts(): array
+    /**
+     * @param string|null $agentId When given, only the loans assigned to that
+     *   agent. Overdue builds its own SQL rather than going through
+     *   QueryParser, so the scope that covers rest.php does not reach it —
+     *   without this the Overdue screen is a door around the rule on loans.
+     */
+    public static function accounts(?string $agentId = null): array
     {
         self::ensureSchema();
         $today = date('Y-m-d');
@@ -73,6 +79,7 @@ class Overdue extends Model
                 ON s.loan_id = l.id AND s.delflag = 0 AND s.due_date < ? AND s.status <> 'paid'
             LEFT JOIN customers c ON c.id = l.customer_id AND c.delflag = 0
             WHERE l.delflag = 0 AND l.status <> 'closed'
+              " . ($agentId ? 'AND l.assigned_agent = ?' : '') . "
             GROUP BY
                 l.id, l.loan_number, l.customer_id, l.customer_name, l.loan_amount,
                 l.loan_type, l.emi, l.outstanding_balance, l.penalty_amount,
@@ -81,8 +88,10 @@ class Overdue extends Model
             HAVING overdue_amount > 0
             ORDER BY days_overdue DESC, overdue_amount DESC
         ";
+        $binds = [$today, $today];
+        if ($agentId) $binds[] = $agentId;
         $stmt = Database::pdo()->prepare($sql);
-        $stmt->execute([$today, $today]);
+        $stmt->execute($binds);
         $rows = $stmt->fetchAll();
 
         // Coerce numeric strings PDO returns into real numbers for the JSON API.

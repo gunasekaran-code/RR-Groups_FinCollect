@@ -1,7 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../../routes/app_routes.dart';
-import '../../models/user_role.dart';
 import '../../theme/app_theme.dart';
 import '../../services/session_service.dart';
 

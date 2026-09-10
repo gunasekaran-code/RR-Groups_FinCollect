@@ -77,6 +77,18 @@ class AccountLedgerEntry {
   final String? notes;
   final DateTime? createdAt;
 
+  /// Which part of the app this row came from: 'loan' | 'fund' | 'chit' |
+  /// 'ledger'. Populated by the backend's unified transaction stream
+  /// (account_book.php?action=stream); derived from the category when a
+  /// plain account_ledger row is echoed back without it (e.g. right after
+  /// creating/updating a custom entry).
+  final String module;
+
+  /// True for rows that live in `account_ledger` (created/edited/deleted
+  /// here). False for rows streamed live from `collections`/`fund_payments`
+  /// — those are read-only receipts owned by the Loan/Fund screens.
+  final bool isCustom;
+
   const AccountLedgerEntry({
     required this.id,
     required this.entryType,
@@ -86,6 +98,8 @@ class AccountLedgerEntry {
     this.entryDate,
     this.notes,
     this.createdAt,
+    this.module = 'ledger',
+    this.isCustom = true,
   });
 
   String get section => LedgerEntryType.isCashInHand(entryType)
@@ -93,6 +107,7 @@ class AccountLedgerEntry {
       : 'Outstanding Lent';
   bool get isPositive => !LedgerEntryType.negativeTypes.contains(entryType);
   String get typeLabel => LedgerEntryType.labelFor(entryType);
+  String get moduleLabel => module.toUpperCase();
   String get displayAmount {
     final formatted = NumberFormat.currency(
       locale: 'en_IN',
@@ -105,18 +120,42 @@ class AccountLedgerEntry {
       entryDate == null ? '' : DateFormat('d MMM yyyy').format(entryDate!);
 
   factory AccountLedgerEntry.fromJson(Map<String, dynamic> json) {
+    final category = json['category']?.toString() ?? 'General';
     return AccountLedgerEntry(
       id: json['id']?.toString() ?? '',
       entryType: LedgerEntryType.normalize(
-        json['entry_type']?.toString() ?? LedgerEntryType.cashIn,
+        (json['entry_type'] ?? json['txn_type'])?.toString() ??
+            LedgerEntryType.cashIn,
       ),
       title: json['title']?.toString() ?? '',
       amount: _toDouble(json['amount']),
-      category: json['category']?.toString() ?? 'General',
-      entryDate: _toDate(json['entry_date']),
+      category: category,
+      entryDate: _toDate(json['entry_date'] ?? json['txn_date']),
       notes: json['notes']?.toString(),
       createdAt: _toDate(json['created_at']),
+      module: json['module']?.toString() ?? _deriveModule(category),
+      isCustom: _toBool(json['is_custom'], defaultValue: true),
     );
+  }
+
+  /// Mirrors the backend's CASE-based module tagging for account_ledger
+  /// rows echoed back without a 'module' key (fresh create/update replies).
+  static String _deriveModule(String category) {
+    final c = category.toLowerCase();
+    if (c.contains('chit')) return 'chit';
+    if (c.contains('fund')) return 'fund';
+    if (c.contains('loan')) return 'loan';
+    return 'ledger';
+  }
+
+  static bool _toBool(dynamic v, {required bool defaultValue}) {
+    if (v == null) return defaultValue;
+    if (v is bool) return v;
+    if (v is num) return v != 0;
+    final s = v.toString().toLowerCase();
+    if (s == 'true' || s == '1') return true;
+    if (s == 'false' || s == '0') return false;
+    return defaultValue;
   }
 
   Map<String, dynamic> toCreateJson() {
@@ -156,6 +195,8 @@ class AccountLedgerEntry {
       entryDate: entryDate ?? this.entryDate,
       notes: notes ?? this.notes,
       createdAt: createdAt,
+      module: module,
+      isCustom: isCustom,
     );
   }
 

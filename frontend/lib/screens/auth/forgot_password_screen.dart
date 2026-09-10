@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import '../../theme/app_theme.dart';
 import '../../services/auth_api_service.dart';
@@ -23,6 +24,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   int _step = 1; // 1 = request otp, 2 = enter otp + new password
   bool _loading = false;
+  bool _obscureNew = true;
+  bool _obscureConfirm = true;
   String? _error;
   String? _info; // e.g. "Code sent to •••••1234" or demo OTP notice
 
@@ -53,8 +56,6 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         final sentTo = res['sent_to'];
         final emailMasked = res['email_masked'];
         _info = 'Code sent to ${sentTo ?? emailMasked ?? 'your registered contact'}.';
-        // The backend only includes demo_otp when no email/SMS provider is
-        // configured yet — remove this block once Mailer/Sms are wired up.
         if (res['demo_otp'] != null) {
           _info = '${_info!}\nDemo OTP (no SMS/email provider configured): ${res['demo_otp']}';
         }
@@ -97,51 +98,164 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Reads like a native iPhone screen on iOS/macOS — San Francisco instead
+    // of the app's usual brand font. No-op on every other platform.
+    return AppTheme.withAppleFont(context, _buildScaffold(context));
+  }
+
+  Widget _buildScaffold(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppColors.kBackground,
-      appBar: AppBar(
-        backgroundColor: AppColors.kBackground,
-        elevation: 0,
-        title: const Text('Reset password', style: TextStyle(color: AppColors.kTextDark)),
-        iconTheme: const IconThemeData(color: AppColors.kTextDark),
-      ),
-      body: SafeArea(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 420),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (_error != null) ...[
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: Colors.red.withOpacity(0.3)),
-                      ),
-                      child: Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 13)),
-                    ),
-                    const SizedBox(height: 16),
-                  ],
-                  if (_info != null) ...[
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: AppColors.kGoldLight.withOpacity(0.35),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AppColors.kGold.withOpacity(0.5)),
-                      ),
-                      child: Text(_info!, style: const TextStyle(color: AppColors.kTextDark, fontSize: 13)),
-                    ),
-                    const SizedBox(height: 16),
-                  ],
-                  if (_step == 1) _buildStep1() else _buildStep2(),
-                ],
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              AppColors.gold100,
+              Color(0xFFFCFCFC),
+              Colors.white,
+              AppColors.gold50,
+              AppColors.gold200,
+            ],
+            stops: [0.0, 0.3, 0.5, 0.8, 1.0],
+          ),
+        ),
+        child: SafeArea(
+          child: Stack(
+            children: [
+              // iOS-Style Back Button
+              Positioned(
+                top: 8,
+                left: 8,
+                child: IconButton(
+                  icon: const Icon(
+                    Icons.arrow_back_ios_new_rounded,
+                    color: AppColors.kTextDark,
+                    size: 20,
+                  ),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
               ),
-            ),
+
+              // Glass Container Body
+              Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 390),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(36),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 36),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.75),
+                            borderRadius: BorderRadius.circular(36),
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.9),
+                              width: 1.5,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.05),
+                                blurRadius: 30,
+                                offset: const Offset(0, 10),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              // Top Lock Badge Icon
+                              Center(
+                                child: Container(
+                                  width: 84,
+                                  height: 84,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: AppColors.gold100.withValues(alpha: 0.6),
+                                  ),
+                                  child: const Icon(
+                                    Icons.lock_reset_rounded,
+                                    color: AppColors.gold600,
+                                    size: 38,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+
+                              // Error Banner
+                              if (_error != null) ...[
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.kDanger.withValues(alpha: 0.08),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(
+                                      color: AppColors.kDanger.withValues(alpha: 0.2),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.error_outline_rounded,
+                                        color: AppColors.kDanger,
+                                        size: 18,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          _error!,
+                                          style: const TextStyle(
+                                            color: AppColors.kDanger,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                              ],
+
+                              // Info / OTP Banner
+                              if (_info != null) ...[
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.gold100.withValues(alpha: 0.5),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(
+                                      color: AppColors.gold400.withValues(alpha: 0.4),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    _info!,
+                                    style: const TextStyle(
+                                      color: AppColors.kTextDark,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                              ],
+
+                              if (_step == 1) _buildStep1() else _buildStep2(),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -154,44 +268,178 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('Verify your identity',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.kTextDark)),
-          const SizedBox(height: 4),
-          const Text('Enter your registered email and mobile number.',
-              style: TextStyle(fontSize: 13, color: AppColors.kTextMuted)),
-          const SizedBox(height: 20),
-          const Text('Email', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.kTextDark)),
+          const Text(
+            'Reset Password',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w700,
+              color: AppColors.kTextDark,
+              letterSpacing: -0.5,
+            ),
+          ),
           const SizedBox(height: 6),
+          const Text(
+            'Enter your registered email and mobile number to receive an OTP.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w400,
+              color: AppColors.kTextMuted,
+            ),
+          ),
+          const SizedBox(height: 28),
+
+          // Email Field
           TextFormField(
             controller: _emailController,
             keyboardType: TextInputType.emailAddress,
-            decoration: const InputDecoration(hintText: 'you@company.com', prefixIcon: Icon(Icons.mail_outline, size: 20)),
-            validator: (v) => (v == null || v.trim().isEmpty || !v.contains('@')) ? 'Enter a valid email' : null,
+            style: const TextStyle(
+              fontSize: 15,
+              color: AppColors.kTextDark,
+              fontWeight: FontWeight.w500,
+            ),
+            decoration: InputDecoration(
+              hintText: 'Email address',
+              hintStyle: TextStyle(
+                color: AppColors.kTextMuted.withValues(alpha: 0.6),
+                fontSize: 15,
+                fontWeight: FontWeight.w400,
+              ),
+              prefixIcon: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Icon(
+                  Icons.mail_outline_rounded,
+                  color: AppColors.gold600,
+                  size: 22,
+                ),
+              ),
+              prefixIconConstraints: const BoxConstraints(minWidth: 54),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.85),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: BorderSide(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  width: 1,
+                ),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(
+                  color: AppColors.gold500,
+                  width: 1.5,
+                ),
+              ),
+              errorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(color: AppColors.kDanger, width: 1),
+              ),
+              focusedErrorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(color: AppColors.kDanger, width: 1.5),
+              ),
+            ),
+            validator: (v) =>
+                (v == null || v.trim().isEmpty || !v.contains('@')) ? 'Enter a valid email' : null,
           ),
           const SizedBox(height: 16),
-          const Text('Registered mobile number',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.kTextDark)),
-          const SizedBox(height: 6),
+
+          // Mobile Field
           TextFormField(
             controller: _mobileController,
             keyboardType: TextInputType.phone,
-            decoration: const InputDecoration(hintText: '9xxxxxxxxx', prefixIcon: Icon(Icons.phone_outlined, size: 20)),
-            validator: (v) => (v == null || v.trim().isEmpty) ? 'Mobile number is required' : null,
+            style: const TextStyle(
+              fontSize: 15,
+              color: AppColors.kTextDark,
+              fontWeight: FontWeight.w500,
+            ),
+            decoration: InputDecoration(
+              hintText: 'Registered mobile number',
+              hintStyle: TextStyle(
+                color: AppColors.kTextMuted.withValues(alpha: 0.6),
+                fontSize: 15,
+                fontWeight: FontWeight.w400,
+              ),
+              prefixIcon: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Icon(
+                  Icons.phone_outlined,
+                  color: AppColors.gold600,
+                  size: 22,
+                ),
+              ),
+              prefixIconConstraints: const BoxConstraints(minWidth: 54),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.85),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: BorderSide(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  width: 1,
+                ),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(
+                  color: AppColors.gold500,
+                  width: 1.5,
+                ),
+              ),
+              errorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(color: AppColors.kDanger, width: 1),
+              ),
+              focusedErrorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(color: AppColors.kDanger, width: 1.5),
+              ),
+            ),
+            validator: (v) =>
+                (v == null || v.trim().isEmpty) ? 'Mobile number is required' : null,
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 28),
+
+          // Send OTP Button
           SizedBox(
-            height: 48,
+            height: 54,
             child: ElevatedButton(
               onPressed: _loading ? null : _requestOtp,
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.kGoldDark,
+                backgroundColor: AppColors.gold600,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
               ),
               child: _loading
                   ? const SizedBox(
-                      height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : const Text('Send OTP', style: TextStyle(fontWeight: FontWeight.w600)),
+                      height: 22,
+                      width: 22,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2.5,
+                      ),
+                    )
+                  : const Text(
+                      'SEND OTP',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
             ),
           ),
         ],
@@ -205,55 +453,265 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text('Enter code & new password',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.kTextDark)),
-          const SizedBox(height: 4),
-          const Text('The code expires in 5 minutes.', style: TextStyle(fontSize: 13, color: AppColors.kTextMuted)),
-          const SizedBox(height: 20),
-          const Text('OTP', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.kTextDark)),
+          const Text(
+            'Enter Code',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w700,
+              color: AppColors.kTextDark,
+              letterSpacing: -0.5,
+            ),
+          ),
           const SizedBox(height: 6),
+          const Text(
+            'Enter the 6-digit code sent to your contact.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w400,
+              color: AppColors.kTextMuted,
+            ),
+          ),
+          const SizedBox(height: 28),
+
+          // OTP Field
           TextFormField(
             controller: _otpController,
             keyboardType: TextInputType.number,
             maxLength: 6,
-            decoration: const InputDecoration(hintText: '6-digit code', counterText: ''),
-            validator: (v) => (v == null || v.trim().length != 6) ? 'Enter the 6-digit code' : null,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 20,
+              color: AppColors.kTextDark,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 6.0,
+            ),
+            decoration: InputDecoration(
+              hintText: '000000',
+              hintStyle: TextStyle(
+                color: AppColors.kTextMuted.withValues(alpha: 0.4),
+                fontSize: 20,
+                fontWeight: FontWeight.normal,
+                letterSpacing: 6.0,
+              ),
+              counterText: '',
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.85),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: BorderSide(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  width: 1,
+                ),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(
+                  color: AppColors.gold500,
+                  width: 1.5,
+                ),
+              ),
+              errorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(color: AppColors.kDanger, width: 1),
+              ),
+              focusedErrorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(color: AppColors.kDanger, width: 1.5),
+              ),
+            ),
+            validator: (v) =>
+                (v == null || v.trim().length != 6) ? 'Enter the 6-digit code' : null,
           ),
-          const SizedBox(height: 12),
-          const Text('New password', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.kTextDark)),
-          const SizedBox(height: 6),
+          const SizedBox(height: 16),
+
+          // New Password Field
           TextFormField(
             controller: _newPasswordController,
-            obscureText: true,
-            decoration: const InputDecoration(hintText: 'At least 6 characters', prefixIcon: Icon(Icons.lock_outline, size: 20)),
+            obscureText: _obscureNew,
+            style: const TextStyle(
+              fontSize: 15,
+              color: AppColors.kTextDark,
+              fontWeight: FontWeight.w500,
+            ),
+            decoration: InputDecoration(
+              hintText: 'New password',
+              hintStyle: TextStyle(
+                color: AppColors.kTextMuted.withValues(alpha: 0.6),
+                fontSize: 15,
+                fontWeight: FontWeight.w400,
+              ),
+              prefixIcon: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Icon(
+                  Icons.lock_outline_rounded,
+                  color: AppColors.gold600,
+                  size: 22,
+                ),
+              ),
+              prefixIconConstraints: const BoxConstraints(minWidth: 54),
+              suffixIcon: Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: IconButton(
+                  icon: Icon(
+                    _obscureNew
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                    color: AppColors.gold600,
+                    size: 22,
+                  ),
+                  onPressed: () => setState(() => _obscureNew = !_obscureNew),
+                ),
+              ),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.85),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: BorderSide(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  width: 1,
+                ),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(
+                  color: AppColors.gold500,
+                  width: 1.5,
+                ),
+              ),
+              errorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(color: AppColors.kDanger, width: 1),
+              ),
+              focusedErrorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(color: AppColors.kDanger, width: 1.5),
+              ),
+            ),
             validator: (v) => (v == null || v.length < 6) ? 'Minimum 6 characters' : null,
           ),
-          const SizedBox(height: 12),
-          const Text('Confirm password', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.kTextDark)),
-          const SizedBox(height: 6),
+          const SizedBox(height: 16),
+
+          // Confirm Password Field
           TextFormField(
             controller: _confirmPasswordController,
-            obscureText: true,
-            decoration: const InputDecoration(hintText: 'Re-enter new password', prefixIcon: Icon(Icons.lock_outline, size: 20)),
-            validator: (v) => (v != _newPasswordController.text) ? 'Passwords do not match' : null,
+            obscureText: _obscureConfirm,
+            style: const TextStyle(
+              fontSize: 15,
+              color: AppColors.kTextDark,
+              fontWeight: FontWeight.w500,
+            ),
+            decoration: InputDecoration(
+              hintText: 'Confirm new password',
+              hintStyle: TextStyle(
+                color: AppColors.kTextMuted.withValues(alpha: 0.6),
+                fontSize: 15,
+                fontWeight: FontWeight.w400,
+              ),
+              prefixIcon: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Icon(
+                  Icons.lock_outline_rounded,
+                  color: AppColors.gold600,
+                  size: 22,
+                ),
+              ),
+              prefixIconConstraints: const BoxConstraints(minWidth: 54),
+              suffixIcon: Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: IconButton(
+                  icon: Icon(
+                    _obscureConfirm
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined,
+                    color: AppColors.gold600,
+                    size: 22,
+                  ),
+                  onPressed: () =>
+                      setState(() => _obscureConfirm = !_obscureConfirm),
+                ),
+              ),
+              filled: true,
+              fillColor: Colors.white.withValues(alpha: 0.85),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: BorderSide.none,
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: BorderSide(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  width: 1,
+                ),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(
+                  color: AppColors.gold500,
+                  width: 1.5,
+                ),
+              ),
+              errorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(color: AppColors.kDanger, width: 1),
+              ),
+              focusedErrorBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: const BorderSide(color: AppColors.kDanger, width: 1.5),
+              ),
+            ),
+            validator: (v) =>
+                (v != _newPasswordController.text) ? 'Passwords do not match' : null,
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 28),
+
+          // Reset Password Button
           SizedBox(
-            height: 48,
+            height: 54,
             child: ElevatedButton(
               onPressed: _loading ? null : _resetPassword,
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.kGoldDark,
+                backgroundColor: AppColors.gold600,
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
               ),
               child: _loading
                   ? const SizedBox(
-                      height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                  : const Text('Reset password', style: TextStyle(fontWeight: FontWeight.w600)),
+                      height: 22,
+                      width: 22,
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                        strokeWidth: 2.5,
+                      ),
+                    )
+                  : const Text(
+                      'RESET PASSWORD',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.0,
+                      ),
+                    ),
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
+
+          // Back to Step 1
           TextButton(
             onPressed: _loading
                 ? null
@@ -262,7 +720,14 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                       _error = null;
                       _info = null;
                     }),
-            child: const Text('Change email or mobile number'),
+            child: const Text(
+              'Change email or mobile number',
+              style: TextStyle(
+                color: AppColors.gold700,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
         ],
       ),

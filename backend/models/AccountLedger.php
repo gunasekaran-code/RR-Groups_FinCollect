@@ -65,23 +65,134 @@ class AccountLedger extends Model
         $stmt->execute();
         $fundDeposits = (float)$stmt->fetchColumn();
 
-        // 3. Chit Members Collections Received (paid or partial)
-        $stmt = $pdo->prepare("SELECT COALESCE(SUM(contribution_amount), 0) FROM chit_members WHERE delflag = 0 AND payment_status IN ('paid', 'partial')");
+        // 3. Cash In / Capital additions from the ledger.
+        //    ChitPassbookService::collect() writes a 'cash_in' row for every
+        //    chit contribution, so chit money is already inside this figure.
+        $stmt = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE delflag = 0 AND entry_type IN ('cash_in', 'capital')");
+        $stmt->execute();
+        $ledgerCashIn = (float)$stmt->fetchColumn();
+
+        // 4. The chit slice of that, for the breakdown only — never added again.
+        //    It used to be summed independently off chit_members, which counted
+        //    every contribution twice in Cash In Hand and, because it took the
+        //    full contribution_amount for anyone marked 'partial', counted money
+        //    that had not arrived. The receipt's own ledger_id is the exact
+        //    link; anything unlinked simply reports as other cash in, which
+        //    changes the labels but never the total.
+        $stmt = $pdo->prepare(
+            "SELECT COALESCE(SUM(al.amount), 0)
+               FROM account_ledger al
+              WHERE al.delflag = 0
+                AND al.entry_type IN ('cash_in', 'capital')
+                AND EXISTS (SELECT 1 FROM chit_payments cp
+                             WHERE cp.ledger_id = al.id AND cp.delflag = 0)"
+        );
         $stmt->execute();
         $chitCollected = (float)$stmt->fetchColumn();
 
-        // 4. Custom Cash In / Capital additions from ledger
-        $stmt = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE delflag = 0 AND entry_type IN ('cash_in', 'capital')");
-        $stmt->execute();
-        $customCashIn = (float)$stmt->fetchColumn();
-
-        // 5. Custom Cash Out / Expenses from ledger
+        // 5. Custom Cash Out / Expenses from ledger. A settled chit auction
+        //    writes its prize here as a cash_out, so the biggest movement in a
+        //    chit group needs no special case to leave Cash In Hand.
         $stmt = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE delflag = 0 AND entry_type IN ('cash_out', 'expense')");
         $stmt->execute();
         $customCashOut = (float)$stmt->fetchColumn();
 
-        // Cash In Hand Total (கையிருப்பு)
-        $cashInHand = max(0, $loanCollections + $fundDeposits + $chitCollected + $customCashIn - $customCashOut);
+        // 5b. The chit-payout slice of that, for the breakdown only — never
+        //     subtracted again. Matched through the auction's own ledger_id
+        //     rather than by category text, so a renamed category cannot turn
+        //     a payout into an ordinary expense on screen.
+        $stmt = $pdo->prepare(
+            "SELECT COALESCE(SUM(al.amount), 0)
+               FROM account_ledger al
+              WHERE al.delflag = 0
+                AND al.entry_type IN ('cash_out', 'expense')
+                AND EXISTS (SELECT 1 FROM chit_auctions ca
+                             WHERE ca.ledger_id = al.id AND ca.delflag = 0)"
+        );
+        $stmt->execute();
+        $chitPayouts = (float)$stmt->fetchColumn();
+
+        // 6. Loan principal handed to customers — cash that physically left.
+        //    'pending' is excluded: a loan awaiting approval has not been paid
+        //    out. This is the money-out side of `collections`, which is already
+        //    counted coming back in, so a closed loan nets out to its interest.
+        //
+        //    The loan amount is not the amount handed over. On the weekly plan
+        //    and the 100-day daily plan the interest is deducted at
+        //    disbursement: a ₹10,000 weekly loan puts ₹9,000 in the borrower's
+        //    hand and the ₹1,000 never leaves the safe. Taking the full
+        //    ₹10,000 off Cash In Hand understated it by the interest on every
+        //    such loan.
+        //
+        //    Which plan a loan is on cannot be read off `loan_type` alone —
+        //    the daily plans differ from each other and the choice between
+        //    them is not stored — but the totals say it plainly. Interest
+        //    added on top repays principal + interest; interest taken upfront
+        //    repays the principal alone. So the amount that left is always
+        //    `total_repayment − total_interest`, which is the principal on the
+        //    plans that add and the principal less the interest on the plans
+        //    that deduct. Loans written before those totals were stored fall
+        //    back to the loan amount, which is what they were.
+        $stmt = $pdo->prepare(
+            "SELECT COALESCE(SUM(
+                        CASE WHEN COALESCE(total_repayment, 0) > 0
+                             THEN GREATEST(COALESCE(total_repayment, 0) - COALESCE(total_interest, 0), 0)
+                             ELSE COALESCE(loan_amount, 0)
+                        END), 0)
+               FROM loans
+              WHERE delflag = 0 AND status IN ('active', 'overdue', 'closed')"
+        );
+        $stmt->execute();
+        $loansDisbursed = (float)$stmt->fetchColumn();
+
+        // The slice of principal that was never handed over — the upfront
+        // interest sitting in the safe. Reported so the Cash In Hand card can
+        // say why it did not fall by the whole loan; it is not added to
+        // anything, because not subtracting it is what keeps it there.
+        $stmt = $pdo->prepare(
+            "SELECT COALESCE(SUM(
+                        CASE WHEN COALESCE(total_repayment, 0) > 0
+                             THEN GREATEST(COALESCE(loan_amount, 0)
+                                           - GREATEST(COALESCE(total_repayment, 0) - COALESCE(total_interest, 0), 0), 0)
+                             ELSE 0
+                        END), 0)
+               FROM loans
+              WHERE delflag = 0 AND status IN ('active', 'overdue', 'closed')"
+        );
+        $stmt->execute();
+        $upfrontInterestHeld = (float)$stmt->fetchColumn();
+
+        // 7. Market lending recorded by hand. Only 'lent_out' is money leaving
+        //    the safe — 'lent_active' and 'lent_overdue' are reclassifications
+        //    of debt that already exists, and moving them would take the cash
+        //    out a second time.
+        $stmt = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE delflag = 0 AND entry_type = 'lent_out'");
+        $stmt->execute();
+        $customLentDisbursed = (float)$stmt->fetchColumn();
+
+        $stmt = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE delflag = 0 AND entry_type = 'lent_collected'");
+        $stmt->execute();
+        $customLentCollected = (float)$stmt->fetchColumn();
+
+        // Cash In Hand (கையிருப்பு) — what is actually in the safe.
+        //
+        // Every rupee handed to a customer has to come off this. It previously
+        // only ever added: lending ₹10,000 out of ₹20,000 capital still showed
+        // ₹20,000 in hand and ₹33,000 net, counting the same money as both cash
+        // and receivable.
+        //
+        // The figure is deliberately allowed to go negative. Clamping it at
+        // zero reported "you have nothing" when the truth was "you have paid
+        // out more than you have recorded taking in" — which is the one thing
+        // this number exists to reveal.
+        $cashInHand = $loanCollections + $fundDeposits + $ledgerCashIn + $customLentCollected
+                    - $customCashOut - $loansDisbursed - $customLentDisbursed;
+
+        // Kept under its old name for the screens that read it: ledger cash in
+        // with the chit receipts shown on their own line.
+        $customCashIn = $ledgerCashIn;
+        $otherCashIn  = $ledgerCashIn - $chitCollected;
+        $otherCashOut = $customCashOut - $chitPayouts;
 
         // 6. Active Loans Outstanding
         $stmt = $pdo->prepare("SELECT COUNT(*) as count, COALESCE(SUM(outstanding_balance), 0) as outstanding FROM loans WHERE delflag = 0 AND status = 'active'");
@@ -99,10 +210,9 @@ class AccountLedger extends Model
 
         $totalLoanOutstanding = $activeLoanOutstanding + $overdueLoanOutstanding;
 
-        // Total Loans Principal Disbursed
-        $stmt = $pdo->prepare("SELECT COALESCE(SUM(loan_amount), 0) FROM loans WHERE delflag = 0 AND status IN ('active', 'overdue', 'closed')");
-        $stmt->execute();
-        $totalLoansGiven = (float)$stmt->fetchColumn();
+        // Total Loans Principal Disbursed — the same figure already taken off
+        // Cash In Hand above.
+        $totalLoansGiven = $loansDisbursed;
 
         // 8. Chit Groups (Active)
         $stmt = $pdo->prepare("SELECT COUNT(*) as count, COALESCE(SUM(group_value), 0) as group_val, COALESCE(SUM(collected_amount), 0) as coll, COALESCE(SUM(pending_amount), 0) as pend FROM chit_groups WHERE delflag = 0 AND status = 'active'");
@@ -127,16 +237,31 @@ class AccountLedger extends Model
         $stmt->execute();
         $customLentOut = (float)$stmt->fetchColumn();
 
-        $stmt = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM account_ledger WHERE delflag = 0 AND entry_type = 'lent_collected'");
-        $stmt->execute();
-        $customLentCollected = (float)$stmt->fetchColumn();
         $customLentNet = max(0, $customLentOut - $customLentCollected);
 
-        // Total Outstanding Money Lent (வெளி கடன்)
-        $outstandingMoneyLent = $totalLoanOutstanding + $chitPendingAmount + $fundPendingAmount + $customLentNet;
+        // Total Outstanding Money Lent (வெளி கடன்) — only debt the business is
+        // actually exposed on: a loan's principal already left the safe, a
+        // fund's deposit target is a maturity payout the business must
+        // eventually honor, and a custom entry is cash handed over by hand.
+        //
+        // Chit pending is deliberately left out. `chit_groups.pending_amount`
+        // is contributions the group's own members have not yet paid in —
+        // money the business is waiting to collect, not money it disbursed —
+        // so it is reported on its own (chitPendingAmount) but never summed
+        // into "money lent".
+        $outstandingMoneyLent = $totalLoanOutstanding + $fundPendingAmount + $customLentNet;
 
-        // Total Net Balance / Working Capital Position (மொத்த இருப்பு)
-        $netBalance = $cashInHand + $outstandingMoneyLent;
+        // Net Balance (மொத்த இருப்பு) — the money the business actually holds.
+        //
+        // It used to be cash + everything owed to us, which counted a loan's
+        // repayment as an asset the day it was written: ₹20,000 of capital lent
+        // out at interest read as ₹33,000 before a rupee had been collected.
+        // Money owed is already its own card; adding it here made the headline
+        // figure rise every time money went *out* of the door.
+        //
+        // Net Balance is now the cash position, and only turns into profit as
+        // the loan is actually repaid.
+        $netBalance = $cashInHand;
 
         return [
             // Cash In Hand
@@ -144,7 +269,13 @@ class AccountLedger extends Model
             'fundDeposits'           => $fundDeposits,
             'chitCollected'          => $chitCollected,
             'customCashIn'           => $customCashIn,
+            'otherCashIn'            => $otherCashIn,
             'customCashOut'          => $customCashOut,
+            'otherCashOut'           => $otherCashOut,
+            'chitPayouts'            => $chitPayouts,
+            'loansDisbursed'         => $loansDisbursed,
+            'upfrontInterestHeld'    => $upfrontInterestHeld,
+            'customLentDisbursed'    => $customLentDisbursed,
             'cashInHand'             => $cashInHand,
 
             // Loans

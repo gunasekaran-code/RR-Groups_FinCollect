@@ -417,6 +417,9 @@ class _LoansScreenState extends State<LoansScreen> {
   bool get _isCustomer =>
       SessionService.instance.currentUser?.role == UserRole.customer;
 
+  bool get _isAgent =>
+      SessionService.instance.currentUser?.role == UserRole.agent;
+
   String? get _customerId =>
       SessionService.instance.currentUser?.customerId?.toString();
 
@@ -443,6 +446,7 @@ class _LoansScreenState extends State<LoansScreen> {
       final loans = await _loanService.fetchLoans(
         customers: customers,
         agents: agents,
+        forceRefresh: true,
       );
       final filteredLoans = _isCustomer && _customerId != null
           ? loans.where((loan) => loan.customerId == _customerId).toList()
@@ -707,7 +711,7 @@ class _LoansScreenState extends State<LoansScreen> {
                 title: l10n.loansTitle,
                 subtitle: l10n.loansSubtitle,
                 actions: [
-                  if (!_isCustomer)
+                  if (!_isCustomer && !_isAgent)
                     Align(
                       alignment: Alignment.centerLeft,
                       child: SizedBox(
@@ -2188,7 +2192,7 @@ class _LoanFormDialogState extends State<LoanFormDialog> {
               Switch(
                 value: _penaltyEnabled,
                 onChanged: (value) => setState(() => _penaltyEnabled = value),
-                activeColor: AppColors.kGold,
+                activeThumbColor: AppColors.kGold,
               ),
             ],
           ),
