@@ -50,6 +50,7 @@ class StatCard extends StatelessWidget {
                       alignment: Alignment.centerLeft,
                       child: Text(
                         value,
+                        maxLines: 1,
                         style: const TextStyle(
                           fontSize: 26, // Adjusted slightly to fit larger text like currency smoothly
                           fontWeight: FontWeight.bold,

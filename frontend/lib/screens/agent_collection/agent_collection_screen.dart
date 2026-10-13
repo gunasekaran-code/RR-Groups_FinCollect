@@ -5,6 +5,9 @@ import '../../widgets/app_shell.dart';
 import '../../theme/glass_toast.dart';
 import '../../models/agent_collection.dart';
 import '../../services/agent_collection_api_service.dart';
+import '../../services/collection_api_service.dart';
+import '../../services/session_service.dart';
+import '../../models/payment_history.dart';
 import '../../utils/location_launcher.dart';
 import '../../screens/agent_collection/agent_collection_detail_screen.dart';
 import '../../widgets/collect_payment_sheet.dart';
@@ -23,6 +26,7 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
   bool _isLoading = true;
   String? _loadError;
   List<AgentCustomerGroup> _groups = [];
+  List<PaymentHistoryItem> _todaysCollections = [];
   String _query = '';
 
   // Keyed by "customerId|loanId" so it survives the list reload after a
@@ -46,11 +50,32 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
       _loadError = null;
     });
     try {
-      final groups =
-          await AgentCollectionApiService.fetchAssignedCollectionGroups();
+      final now = DateTime.now();
+      final tomorrow = DateTime(now.year, now.month, now.day + 1);
+      final agentId = SessionService.instance.currentUser?.userId;
+      final groupsFuture =
+          AgentCollectionApiService.fetchAssignedCollectionGroups();
+      final collectionsFuture = agentId == null || agentId.isEmpty
+          ? Future.value(<Map<String, dynamic>>[])
+          : CollectionApiService.fetchCollections(
+              agentId: agentId,
+              fromDate: DateTime(now.year, now.month, now.day),
+            );
+      final groups = await groupsFuture;
+      final collectionRows = await collectionsFuture;
       if (!mounted) return;
       setState(() {
         _groups = groups;
+        _todaysCollections = collectionRows
+            .map(PaymentHistoryItem.fromJson)
+            .where((item) {
+              final date = item.collectedDate;
+              return item.isPaidRecord &&
+                  date != null &&
+                  date.isBefore(tomorrow) &&
+                  !date.isBefore(DateTime(now.year, now.month, now.day));
+            })
+            .toList();
         _isLoading = false;
       });
     } catch (e) {
@@ -73,6 +98,32 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
   double get _totalDue =>
       _groups.fold(0.0, (sum, g) => sum + g.totalDueWithPenalty);
 
+  List<AgentCustomerGroup> get _toCollectTodayGroups => _groups
+      .map((group) {
+        final payableItems = group.payableDueItems;
+        if (payableItems.isEmpty) return null;
+        return AgentCustomerGroup(
+          customerId: group.customerId,
+          customerName: group.customerName,
+          loanId: group.loanId,
+          loanType: group.loanType,
+          loanName: group.loanName,
+          items: payableItems,
+          contactPhone: group.contactPhone,
+          address: group.address,
+          latitude: group.latitude,
+          longitude: group.longitude,
+        );
+      })
+      .whereType<AgentCustomerGroup>()
+      .toList();
+
+  double get _toCollectTodayTotal => _toCollectTodayGroups.fold(
+      0.0, (sum, group) => sum + group.totalDueWithPenalty);
+
+  double get _todaysCollectionsTotal =>
+      _todaysCollections.fold(0.0, (sum, item) => sum + item.amount);
+
   void _openDetail(AgentCustomerGroup group) async {
     await Navigator.of(context).push(
       MaterialPageRoute(
@@ -88,6 +139,12 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
   }
 
   void _showCollectSheet(AgentCustomerGroup group) {
+    final isMonthlyInterest = group.collectionType == LoanCollectionType.monthlyInterest;
+    final overdueDueCount = group.overdueDueCount;
+    final hasOverdueDues = overdueDueCount > 0;
+    final dueAmount = hasOverdueDues ? group.overdueDueAmount : group.totalDue;
+    final dueCount = hasOverdueDues ? overdueDueCount : group.items.length;
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -95,24 +152,42 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
       barrierColor: Colors.black.withValues(alpha: 0.4),
       builder: (context) => CollectPaymentSheet(
         customerName: group.customerName,
-        subtitleLabel: 'Loan Type',
-        subtitleValue: group.displayLoanType,
-        prefillAmount: group.totalDueWithPenalty,
+        loanCollectionType: group.collectionType,
+        // Monthly-interest loans don't have a single "due amount" — show
+        // the loan number instead, matching the loan-type-specific info
+        // box the sheet renders for that type.
+        subtitleLabel: isMonthlyInterest ? 'Monthly Interest Loan' : 'Due Amount',
+        subtitleValue: isMonthlyInterest
+            ? (group.loanNumbers.isNotEmpty
+                ? group.loanNumbers.first
+                : group.loanId)
+            : AgentCollectionItem.formatAmount(dueAmount),
+          prefillAmount: dueAmount,
         installmentAmount: group.items.isNotEmpty
-          ? group.items.first.installmentAmount
-          : null,
-        dueAmount: group.totalDue,
+            ? group.items.first.installmentAmount
+            : null,
+        dueAmount: dueAmount,
+        // Already gated by loan type inside the model (0 for daily /
+        // monthly-interest loans), so no extra check needed here.
         penaltyAmount: group.totalPenalty,
         outstandingBalance: group.totalOutstanding,
-        dueCount: group.items.length,
-        onSubmit: (amount, method, date, notes) =>
-            _collectForGroup(group, amount, method, date, notes),
+        dueCount: dueCount,
+        onSubmit: (amount, method, date, notes, paymentType, penalty) =>
+            _collectForGroup(
+                group, amount, method, date, notes, paymentType, penalty),
       ),
     );
   }
 
-  Future<void> _collectForGroup(AgentCustomerGroup group, double amount,
-      String method, DateTime date, String? notes) async {
+  Future<void> _collectForGroup(
+    AgentCustomerGroup group,
+    double amount,
+    String method,
+    DateTime date,
+    String? notes,
+    String paymentType,
+    double penaltyAmount,
+  ) async {
     try {
       final createdCount = await AgentCollectionApiService.collectForCustomer(
         group: group,
@@ -120,6 +195,8 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
         paymentMethod: method,
         collectionDate: date,
         notes: notes,
+        paymentType: paymentType,
+        penaltyAmount: penaltyAmount,
       );
       if (!mounted) return;
       final now = DateTime.now();
@@ -157,34 +234,53 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
     return AppShell(
       currentRoute: AppRoutes.collections,
       title: 'Collections',
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _loadError != null
-              ? Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('Failed to load collections',
-                          style: TextStyle(color: scheme.error)),
-                      const SizedBox(height: 8),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: Text(_loadError!,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: scheme.onSurfaceVariant)),
+      // Center & ConstrainedBox make the UI fully responsive on Tablets/Web
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 800),
+          child: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : _loadError != null
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.error_outline,
+                              size: 48, color: scheme.error),
+                          const SizedBox(height: 16),
+                          Text('Failed to load collections',
+                              style: TextStyle(
+                                  color: scheme.error,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16)),
+                          const SizedBox(height: 8),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            child: Text(_loadError!,
+                                textAlign: TextAlign.center,
+                                style:
+                                    TextStyle(color: scheme.onSurfaceVariant)),
+                          ),
+                          const SizedBox(height: 24),
+                          ElevatedButton.icon(
+                            onPressed: _load,
+                            icon: const Icon(Icons.refresh),
+                            label: const Text('Retry'),
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 24, vertical: 12),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                        onPressed: _load,
-                        child: const Text('Retry'),
-                      ),
-                    ],
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: _buildList(),
-                ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: _load,
+                      color: _kGold,
+                      child: _buildList(),
+                    ),
+        ),
+      ),
     );
   }
 
@@ -192,7 +288,7 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
     final filtered = _filteredGroups;
     return ListView.builder(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: 24),
       itemCount: filtered.length + 1,
       itemBuilder: (context, index) {
         if (index == 0) return _buildHeader();
@@ -210,45 +306,74 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
 
   Widget _buildHeader() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
             'Collections',
             style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
+              fontSize: 28,
+              fontWeight: FontWeight.w800,
               color: AppColors.kTextDark,
+              letterSpacing: -0.5,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 6),
           Text(
             '${_groups.length} customers assigned • $_collectedToday collected today',
-            style: const TextStyle(fontSize: 13, color: AppColors.kTextMuted),
+            style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+                color: AppColors.kTextMuted),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
           _buildTotalDueBanner(),
+          const SizedBox(height: 20),
+          _buildToCollectToday(),
           const SizedBox(height: 16),
+          _buildTodaysCollections(),
+          const SizedBox(height: 20),
           _buildSearchBar(),
-          if (_query.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Text(
-                '${_filteredGroups.length} result(s) for "$_query"',
-                style:
-                    const TextStyle(fontSize: 12, color: AppColors.kTextMuted),
-              ),
-            ),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+            child: _query.isNotEmpty
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 12, left: 4),
+                    child: Text(
+                      '${_filteredGroups.length} result(s) for "$_query"',
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.kTextMuted),
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
           if (_filteredGroups.isEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 60),
               child: Center(
-                child: Text(
-                  _query.isEmpty
-                      ? 'No collections assigned'
-                      : 'No customers match "$_query"',
-                  style: const TextStyle(color: AppColors.kTextMuted),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _query.isEmpty ? Icons.inbox_outlined : Icons.search_off,
+                      size: 64,
+                      color: AppColors.kTextMuted.withValues(alpha: 0.5),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      _query.isEmpty
+                          ? 'No collections assigned'
+                          : 'No customers match "$_query"',
+                      style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.kTextMuted),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -260,10 +385,21 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
   Widget _buildTotalDueBanner() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
       decoration: BoxDecoration(
-        color: _kGold,
-        borderRadius: BorderRadius.circular(14),
+        gradient: const LinearGradient(
+          colors: [Color(0xFFA9791F), Color(0xFFC48E28)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: _kGold.withValues(alpha: 0.3),
+            blurRadius: 12,
+            offset: const Offset(0, 6),
+          )
+        ],
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -272,15 +408,19 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('Total Collection Due',
-                  style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500)),
             ],
           ),
           Text(
             AgentCollectionItem.formatAmount(_totalDue),
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.5,
             ),
           ),
         ],
@@ -288,35 +428,280 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
     );
   }
 
+  Widget _buildToCollectToday() {
+    final groups = _toCollectTodayGroups;
+    return _SummarySection(
+      title: 'To Collect Today',
+      total: AgentCollectionItem.formatAmount(_toCollectTodayTotal),
+      subtitle:
+          '${groups.length} customer${groups.length == 1 ? '' : 's'} • '
+          '${AgentCollectionItem.formatAmount(_toCollectTodayTotal)} in arrears',
+      child: groups.isEmpty
+          ? const _SummaryEmptyState(label: 'No pending collections')
+          : Column(
+              children: groups
+                  .take(6)
+                  .map((group) => _TodayDueRow(
+                        group: group,
+                        onCollect: () => _showCollectSheet(group),
+                      ))
+                  .toList(),
+            ),
+    );
+  }
+
+  Widget _buildTodaysCollections() {
+    return _SummarySection(
+      title: "Today's Collections",
+      total: AgentCollectionItem.formatAmount(_todaysCollectionsTotal),
+      subtitle:
+          '${_todaysCollections.length} receipt${_todaysCollections.length == 1 ? '' : 's'}',
+      child: _todaysCollections.isEmpty
+          ? const _SummaryEmptyState(label: 'No collections recorded today')
+          : Column(
+              children: _todaysCollections
+                  .map((item) => _TodayCollectionRow(item: item))
+                  .toList(),
+            ),
+    );
+  }
+
   Widget _buildSearchBar() {
-    return TextField(
-      onChanged: (v) => setState(() => _query = v),
-      decoration: InputDecoration(
-        hintText: 'Search by name or Loan ID',
-        prefixIcon: const Icon(Icons.search, color: AppColors.kTextMuted),
-        suffixIcon: _query.isNotEmpty
-            ? IconButton(
-                icon: const Icon(Icons.close, color: AppColors.kTextMuted),
-                onPressed: () => setState(() => _query = ''),
-              )
-            : null,
-        filled: true,
-        fillColor: AppColors.kBackground,
-        contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: AppColors.kBorder),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: AppColors.kBorder),
+    return Container(
+      decoration: BoxDecoration(
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          )
+        ],
+      ),
+      child: TextField(
+        onChanged: (v) => setState(() => _query = v),
+        decoration: InputDecoration(
+          hintText: 'Search by name or Loan ID',
+          hintStyle: TextStyle(color: AppColors.kTextMuted.withValues(alpha: 0.8)),
+          prefixIcon: const Icon(Icons.search, color: AppColors.kTextMuted),
+          suffixIcon: _query.isNotEmpty
+              ? IconButton(
+                  icon: const Icon(Icons.close, color: AppColors.kTextMuted),
+                  onPressed: () => setState(() => _query = ''),
+                )
+              : null,
+          filled: true,
+          fillColor: AppColors.kSurface,
+          contentPadding:
+              const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide.none,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide.none,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: _kGold, width: 1.5),
+          ),
         ),
       ),
     );
   }
 }
 
-class _CustomerGroupCard extends StatelessWidget {
+class _SummarySection extends StatelessWidget {
+  final String title;
+  final String total;
+  final String subtitle;
+  final Widget child;
+
+  const _SummarySection({
+    required this.title,
+    required this.total,
+    required this.subtitle,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.kSurface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Text(title,
+                    style: const TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.w700)),
+              ),
+              Text(total,
+                  style: const TextStyle(
+                      fontSize: 18, fontWeight: FontWeight.w800)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(subtitle,
+              style: const TextStyle(color: AppColors.kTextMuted)),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _SummaryEmptyState extends StatelessWidget {
+  final String label;
+  const _SummaryEmptyState({required this.label});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Center(
+          child: Text(label,
+              style: const TextStyle(color: AppColors.kTextMuted)),
+        ),
+      );
+}
+
+class _TodayDueRow extends StatelessWidget {
+  final AgentCustomerGroup group;
+  final VoidCallback onCollect;
+
+  const _TodayDueRow({required this.group, required this.onCollect});
+
+  @override
+  Widget build(BuildContext context) {
+    final status = [
+      if (group.overdueCount > 0) 'Overdue - ${group.overdueCount}',
+      if (group.dueTodayCount > 0) 'Today - ${group.dueTodayCount}',
+    ].join(' • ');
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.kBorder),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 20,
+            backgroundColor: _kGold,
+            child: Text(group.initials,
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(group.customerName,
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 3),
+                Text(
+                  '${group.loanNumbers.isNotEmpty ? group.loanNumbers.first : group.loanId} • ${group.displayLoanType}',
+                  style: const TextStyle(
+                      fontSize: 12, color: AppColors.kTextMuted),
+                ),
+                const SizedBox(height: 5),
+                Text(status,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: group.hasOverdue
+                            ? AppColors.kDanger
+                            : AppColors.kWarning)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(AgentCollectionItem.formatAmount(group.totalDueWithPenalty),
+                  style: const TextStyle(fontWeight: FontWeight.w800)),
+              const SizedBox(height: 7),
+              ElevatedButton(
+                onPressed: onCollect,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _kGold,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  minimumSize: const Size(0, 36),
+                ),
+                child: const Text('Collect'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TodayCollectionRow extends StatelessWidget {
+  final PaymentHistoryItem item;
+  const _TodayCollectionRow({required this.item});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: AppColors.kBorder),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: _kGold,
+            child: Text(_initials(item.customerName),
+                style: const TextStyle(color: Colors.white)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(item.customerName,
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 3),
+                Text('${item.displayReceipt} • ${item.displayMode}',
+                    style: const TextStyle(
+                        fontSize: 12, color: AppColors.kTextMuted)),
+              ],
+            ),
+          ),
+          Text(item.formattedAmount,
+              style: const TextStyle(fontWeight: FontWeight.w800)),
+        ],
+      ),
+    );
+  }
+
+  String _initials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty || parts.first.isEmpty) return '?';
+    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
+    return (parts.first.substring(0, 1) + parts.last.substring(0, 1))
+        .toUpperCase();
+  }
+}
+
+class _CustomerGroupCard extends StatefulWidget {
   final AgentCustomerGroup group;
   final double? collectedTodayAmount;
   final VoidCallback onTap;
@@ -331,13 +716,19 @@ class _CustomerGroupCard extends StatelessWidget {
     required this.onVisit,
   });
 
-  bool get _isPaidToday => collectedTodayAmount != null;
+  @override
+  State<_CustomerGroupCard> createState() => _CustomerGroupCardState();
+}
 
-  String get _statusLabel => _isPaidToday ? 'Paid' : group.statusLabel;
+class _CustomerGroupCardState extends State<_CustomerGroupCard> {
+  bool _isHovered = false;
+
+  bool get _isPaidToday => widget.collectedTodayAmount != null;
+  String get _statusLabel => _isPaidToday ? 'Paid' : widget.group.statusLabel;
 
   Color get _statusColor {
     if (_isPaidToday) return AppColors.kSuccess;
-    switch (group.status) {
+    switch (widget.group.status) {
       case AgentCollectionStatus.overdue:
         return AppColors.kDanger;
       case AgentCollectionStatus.dueToday:
@@ -349,7 +740,7 @@ class _CustomerGroupCard extends StatelessWidget {
 
   Color get _statusBg {
     if (_isPaidToday) return const Color(0xFFE7F7EE);
-    switch (group.status) {
+    switch (widget.group.status) {
       case AgentCollectionStatus.overdue:
         return const Color(0xFFFDEBEC);
       case AgentCollectionStatus.dueToday:
@@ -361,184 +752,245 @@ class _CustomerGroupCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.kSurface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.kBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: onTap,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: _kGoldTint,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        group.initials,
-                        style: const TextStyle(
-                            color: _kGold, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
+    return MouseRegion(
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeInOut,
+        margin: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+        decoration: BoxDecoration(
+          color: AppColors.kSurface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: _isHovered ? _kGold.withValues(alpha: 0.5) : AppColors.kBorder,
+            width: _isHovered ? 1.5 : 1.0,
+          ),
+          boxShadow: [
+            if (_isHovered)
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.06),
+                blurRadius: 12,
+                offset: const Offset(0, 6),
+              )
+            else
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.02),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              )
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              InkWell(
+                onTap: widget.onTap,
+                splashColor: _kGold.withValues(alpha: 0.1),
+                highlightColor: _kGold.withValues(alpha: 0.05),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(group.customerName,
+                          Container(
+                            width: 44,
+                            height: 44,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: _kGoldTint,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              widget.group.initials,
                               style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 16,
-                                  color: AppColors.kTextDark)),
-                          const SizedBox(height: 2),
-                          Text(
-                              group.loanNumbers.isNotEmpty
-                                  ? group.loanNumbers.first
-                                  : group.loanId,
-                              style: const TextStyle(
-                                  fontSize: 13, color: AppColors.kTextMuted)),
+                                  color: _kGold,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16),
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(widget.group.customerName,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 16,
+                                        color: AppColors.kTextDark)),
+                                const SizedBox(height: 4),
+                                Text(
+                                    widget.group.loanNumbers.isNotEmpty
+                                        ? widget.group.loanNumbers.first
+                                        : widget.group.loanId,
+                                    style: const TextStyle(
+                                        fontSize: 13,
+                                        color: AppColors.kTextMuted)),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: _statusBg,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              _statusLabel,
+                              style: TextStyle(
+                                color: _statusColor,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
                         ],
                       ),
-                    ),
-                    Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: _statusBg,
-                        borderRadius: BorderRadius.circular(20),
+                      const SizedBox(height: 18),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _InfoBox(
+                                label: 'EMI',
+                                value: AgentCollectionItem.formatAmount(
+                                    widget.group.items.first.installmentAmount)),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _InfoBox(
+                                label: 'Total Due',
+                                value: AgentCollectionItem.formatAmount(
+                                    widget.group.totalDueWithPenalty)),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _InfoBox(
+                                label: 'Next Due',
+                                value: AgentCollectionItem.formatDate(
+                                    widget.group.nearestDueDate)),
+                          ),
+                        ],
                       ),
-                      child: Text(
-                        _statusLabel,
-                        style: TextStyle(
-                          color: _statusColor,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
-                        ),
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          const Icon(Icons.phone_outlined,
+                              size: 16, color: AppColors.kTextMuted),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              widget.group.contactPhone?.isNotEmpty == true
+                                  ? widget.group.contactPhone!
+                                  : 'Contact on file',
+                              style: const TextStyle(
+                                  fontSize: 13, color: AppColors.kTextMuted),
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _InfoBox(
-                          label: 'EMI',
-                          value: AgentCollectionItem.formatAmount(
-                              group.items.first.installmentAmount)),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _InfoBox(
-                          label: 'Due Amount',
-                          value: AgentCollectionItem.formatAmount(
-                              group.totalDueWithPenalty)),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _InfoBox(
-                          label: 'Next Due',
-                          value: AgentCollectionItem.formatDate(
-                              group.nearestDueDate)),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    const Icon(Icons.phone_outlined,
-                        size: 16, color: AppColors.kTextMuted),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        group.contactPhone?.isNotEmpty == true
-                            ? group.contactPhone!
-                            : 'Contact on file',
-                        style: const TextStyle(
-                            fontSize: 13, color: AppColors.kTextMuted),
-                      ),
-                    ),
-                  ],
-                ),
-                if (_isPaidToday) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE7F7EE),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.check, size: 16, color: AppColors.kSuccess),
-                        const SizedBox(width: 8),
-                        Text(
-                          '${AgentCollectionItem.formatAmount(collectedTodayAmount!)} collected today',
-                          style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.kSuccess),
+                      if (_isPaidToday) ...[
+                        const SizedBox(height: 14),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE7F7EE),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                                color: AppColors.kSuccess.withValues(alpha: 0.3)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.check_circle,
+                                  size: 18, color: AppColors.kSuccess),
+                              const SizedBox(width: 10),
+                              Text(
+                                '${AgentCollectionItem.formatAmount(widget.collectedTodayAmount!)} collected today',
+                                style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.kSuccess),
+                              ),
+                            ],
+                          ),
                         ),
                       ],
-                    ),
+                    ],
                   ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                flex: 2,
-                child: ElevatedButton.icon(
-                  onPressed: onCollect,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _kGold,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                  ),
-                  icon: const Icon(Icons.currency_rupee, size: 16),
-                  label: const Text('Collect'),
                 ),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: onVisit,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.kTextDark,
-                    side: const BorderSide(color: AppColors.kBorder),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
-                  ),
-                  icon: const Icon(Icons.location_on_outlined, size: 16),
-                  label: const Text('Visit'),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      flex: 2,
+                      child: ElevatedButton.icon(
+                        onPressed: widget.onCollect,
+                        style: ButtonStyle(
+                          backgroundColor: WidgetStateProperty.resolveWith(
+                            (states) => states.contains(WidgetState.hovered)
+                                ? const Color(0xFF90651A)
+                                : _kGold,
+                          ),
+                          foregroundColor:
+                              WidgetStateProperty.all(Colors.white),
+                          elevation: WidgetStateProperty.resolveWith(
+                              (states) => states.contains(WidgetState.hovered)
+                                  ? 4
+                                  : 0),
+                          padding: WidgetStateProperty.all(
+                              const EdgeInsets.symmetric(vertical: 14)),
+                          shape: WidgetStateProperty.all(RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12))),
+                        ),
+                        icon: const Icon(Icons.currency_rupee, size: 18),
+                        label: const Text('Collect',
+                            style: TextStyle(
+                                fontSize: 15, fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: widget.onVisit,
+                        style: ButtonStyle(
+                          foregroundColor:
+                              WidgetStateProperty.all(AppColors.kTextDark),
+                          backgroundColor: WidgetStateProperty.resolveWith(
+                            (states) => states.contains(WidgetState.hovered)
+                                ? AppColors.kBorder.withValues(alpha: 0.3)
+                                : Colors.transparent,
+                          ),
+                          side: WidgetStateProperty.all(
+                              const BorderSide(color: AppColors.kBorder)),
+                          padding: WidgetStateProperty.all(
+                              const EdgeInsets.symmetric(vertical: 14)),
+                          shape: WidgetStateProperty.all(RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12))),
+                        ),
+                        icon: const Icon(Icons.location_on_outlined, size: 18),
+                        label: const Text('Visit',
+                            style: TextStyle(
+                                fontSize: 15, fontWeight: FontWeight.w600)),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -552,23 +1004,27 @@ class _InfoBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       decoration: BoxDecoration(
         color: AppColors.kBackground,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.kBorder.withValues(alpha: 0.5)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(label,
-              style:
-                  const TextStyle(fontSize: 11, color: AppColors.kTextMuted)),
-          const SizedBox(height: 2),
+              style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.kTextMuted)),
+          const SizedBox(height: 4),
           Text(value,
               style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.kTextDark)),
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.kTextDark,
+                  letterSpacing: -0.3)),
         ],
       ),
     );

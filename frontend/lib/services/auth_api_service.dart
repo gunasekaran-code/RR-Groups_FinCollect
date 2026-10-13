@@ -1,7 +1,10 @@
 import 'dart:convert';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/api_config.dart';
+import 'session_service.dart';
+import 'session_http_client.dart';
 
 /// Thrown for any non-2xx response. `message` is the human-readable
 /// error your PHP `json_error()` sends back.
@@ -22,6 +25,7 @@ class AuthApiService {
 
   static const _tokenKey = 'auth_token';
   static const _profileKey = 'auth_profile';
+  static const _secureStorage = FlutterSecureStorage();
 
   Future<Map<String, dynamic>> _post(
       String action, Map<String, dynamic> body) async {
@@ -41,6 +45,8 @@ class AuthApiService {
             body: jsonEncode(body),
           )
           .timeout(const Duration(seconds: 15));
+    } on SessionExpiredException {
+      rethrow;
     } catch (_) {
       throw ApiException(
           'Could not reach the server. Check your connection and try again.',
@@ -55,6 +61,7 @@ class AuthApiService {
     }
 
     if (res.statusCode < 200 || res.statusCode >= 300) {
+      await SessionService.instance.handleUnauthorized(res);
       throw ApiException(
           (data['error'] ?? data['message'] ?? 'Something went wrong')
               .toString(),
@@ -104,27 +111,44 @@ Future<Map<String, dynamic>> login(
   // ---- session helpers ---------------------------------------------------
 
   Future<void> _saveSession(String token, Map<String, dynamic>? profile) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_tokenKey, token);
+    await _secureStorage.write(key: _tokenKey, value: token);
     if (profile != null) {
-      await prefs.setString(_profileKey, jsonEncode(profile));
+      await _secureStorage.write(key: _profileKey, value: jsonEncode(profile));
     }
   }
 
   Future<String?> getToken() async {
+    final token = await _secureStorage.read(key: _tokenKey);
+    if (token != null && token.isNotEmpty) return token;
+
+    // Migrate tokens saved by versions that used SharedPreferences.
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_tokenKey);
+    final legacyToken = prefs.getString(_tokenKey);
+    if (legacyToken == null || legacyToken.isEmpty) return null;
+    await _secureStorage.write(key: _tokenKey, value: legacyToken);
+    await prefs.remove(_tokenKey);
+    return legacyToken;
   }
 
   Future<Map<String, dynamic>?> getStoredProfile() async {
+    final raw = await _secureStorage.read(key: _profileKey);
+    if (raw != null && raw.isNotEmpty) {
+      return jsonDecode(raw) as Map<String, dynamic>;
+    }
+
+    // Migrate profiles saved by versions that used SharedPreferences.
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_profileKey);
-    if (raw == null) return null;
-    return jsonDecode(raw) as Map<String, dynamic>;
+    final legacyProfile = prefs.getString(_profileKey);
+    if (legacyProfile == null || legacyProfile.isEmpty) return null;
+    await _secureStorage.write(key: _profileKey, value: legacyProfile);
+    await prefs.remove(_profileKey);
+    return jsonDecode(legacyProfile) as Map<String, dynamic>;
   }
 
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
+    await _secureStorage.delete(key: _tokenKey);
+    await _secureStorage.delete(key: _profileKey);
     await prefs.remove(_tokenKey);
     await prefs.remove(_profileKey);
   }
@@ -157,8 +181,8 @@ Future<Map<String, dynamic>> login(
 
     final updatedProfile = data['profile'] as Map<String, dynamic>?;
     if (updatedProfile != null) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_profileKey, jsonEncode(updatedProfile));
+      await _secureStorage.write(
+          key: _profileKey, value: jsonEncode(updatedProfile));
       return updatedProfile;
     }
 
@@ -173,8 +197,7 @@ Future<Map<String, dynamic>> login(
       'address': address,
       if (avatarBase64 != null) 'avatar_url': avatarBase64, // NEW
     };
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_profileKey, jsonEncode(merged));
+    await _secureStorage.write(key: _profileKey, value: jsonEncode(merged));
     return merged;
   }
 }

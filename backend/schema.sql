@@ -15,6 +15,7 @@ DROP TABLE IF EXISTS biometric_credentials;
 DROP TABLE IF EXISTS push_subscriptions;
 DROP TABLE IF EXISTS notifications;
 DROP TABLE IF EXISTS handovers;
+DROP TABLE IF EXISTS fund_payouts;
 DROP TABLE IF EXISTS fund_payments;
 DROP TABLE IF EXISTS funds;
 DROP TABLE IF EXISTS chit_auctions;
@@ -154,6 +155,13 @@ CREATE TABLE collections (
   proof_url        LONGTEXT     NULL,
   signature_url    LONGTEXT     NULL,
   created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- Soft delete. A receipt is money that was received: it is flagged and
+  -- archived, never removed. The Account Book deletes these rows directly, and
+  -- sums them with `WHERE delflag = 0`.
+  delflag          TINYINT(1)   NOT NULL DEFAULT 0,
+  deleted_at       DATETIME     NULL,
+  deleted_by       CHAR(36)     NULL,
+  INDEX idx_collections_delflag (delflag),
   INDEX idx_collections_loan (loan_id),
   INDEX idx_collections_agent (agent_id),
   INDEX idx_collections_date (collection_date),
@@ -186,6 +194,14 @@ CREATE TABLE chit_groups (
   assigned_agent       CHAR(36)     NULL,
   agent_name           VARCHAR(191) NULL,
   created_at           DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- Deleting a group flags it and everything under it rather than removing
+  -- any of it, so the money it collected stays auditable and the recycle
+  -- bin can put the whole group back. Every chit figure is read with
+  -- `WHERE delflag = 0`.
+  delflag              TINYINT(1)   NOT NULL DEFAULT 0,
+  deleted_at           DATETIME     NULL,
+  deleted_by           CHAR(36)     NULL,
+  INDEX idx_chit_groups_delflag (delflag),
   INDEX idx_chit_groups_agent (assigned_agent),
   CONSTRAINT fk_chit_groups_agent FOREIGN KEY (assigned_agent)
     REFERENCES profiles(id) ON DELETE SET NULL
@@ -201,6 +217,10 @@ CREATE TABLE chit_members (
   due_date            DATE         NULL,
   payment_status      ENUM('paid','partial','overdue','pending') NOT NULL DEFAULT 'pending',
   created_at          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  delflag             TINYINT(1)   NOT NULL DEFAULT 0,
+  deleted_at          DATETIME     NULL,
+  deleted_by          CHAR(36)     NULL,
+  INDEX idx_chit_members_delflag (delflag),
   INDEX idx_members_group (group_id),
   CONSTRAINT fk_members_group FOREIGN KEY (group_id)
     REFERENCES chit_groups(id) ON DELETE CASCADE
@@ -217,6 +237,10 @@ CREATE TABLE chit_schedules (
   is_overridden  TINYINT(1)   NOT NULL DEFAULT 0,
   notes          VARCHAR(255) NULL,
   created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  delflag        TINYINT(1)   NOT NULL DEFAULT 0,
+  deleted_at     DATETIME     NULL,
+  deleted_by     CHAR(36)     NULL,
+  INDEX idx_chit_schedules_delflag (delflag),
   -- Two copies of a draw would ask every member to pay it twice.
   UNIQUE KEY uniq_chit_schedule_draw (group_id, installment_no),
   INDEX idx_chit_sched_group (group_id),
@@ -244,6 +268,13 @@ CREATE TABLE chit_payments (
   ledger_id      CHAR(36)     NULL,                 -- the account_ledger receipt this came from
   notes          TEXT         NULL,
   created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- A contribution is never counted from this table — Cash In Hand sums the
+  -- `account_ledger` receipt named by ledger_id. Deleting either one flags
+  -- both, or the record and the money would disagree.
+  delflag        TINYINT(1)   NOT NULL DEFAULT 0,
+  deleted_at     DATETIME     NULL,
+  deleted_by     CHAR(36)     NULL,
+  INDEX idx_chit_payments_delflag (delflag),
   INDEX idx_chit_payments_group (group_id),
   INDEX idx_chit_payments_member (member_id),
   INDEX idx_chit_payments_customer (customer_id),
@@ -384,9 +415,60 @@ CREATE TABLE fund_payments (
   agent_name     VARCHAR(191) NULL,
   notes          TEXT         NULL,
   created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- Soft delete, for the same reason as collections: a deposit is money that
+  -- arrived, and Cash In Hand sums this table with `WHERE delflag = 0`.
+  delflag        TINYINT(1)   NOT NULL DEFAULT 0,
+  deleted_at     DATETIME     NULL,
+  deleted_by     CHAR(36)     NULL,
+  INDEX idx_fund_payments_delflag (delflag),
   INDEX idx_fund_payments_fund (fund_id),
   INDEX idx_fund_payments_customer (customer_id),
   CONSTRAINT fk_fund_payments_fund FOREIGN KEY (fund_id)
+    REFERENCES funds(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------- fund_payouts (the money going back OUT to the customer) ----------
+-- `fund_payments` is the passbook of deposits coming IN, and Cash In Hand sums
+-- it as cash received. A maturity or closure payout was being written there
+-- too, so handing a customer their money back raised Cash In Hand by the amount
+-- paid out. Money leaving needs its own record, exactly as a chit prize does.
+--
+-- One row per payout rather than columns on `funds`, because a fund can be
+-- closed a few units at a time and each closure hands over its own share.
+--   maturity   = deposits + bonus   (every week paid in — the bonus is earned)
+--   settlement = deposits           (closed early — the bonus is not)
+--   partial    = that share of the deposits, the rest still collecting
+CREATE TABLE fund_payouts (
+  id             CHAR(36)      NOT NULL PRIMARY KEY,
+  fund_id        CHAR(36)      NOT NULL,
+  fund_number    VARCHAR(64)   NULL,
+  customer_id    CHAR(36)      NULL,
+  customer_name  VARCHAR(191)  NULL,
+  kind           ENUM('maturity','settlement','partial') NOT NULL DEFAULT 'settlement',
+  units_closed   DECIMAL(10,2) NOT NULL DEFAULT 0,
+  deposit_amount DECIMAL(14,2) NOT NULL DEFAULT 0,   -- the customer's own money back
+  bonus_amount   DECIMAL(14,2) NOT NULL DEFAULT 0,   -- 0 on anything but a matured fund
+  payout_amount  DECIMAL(14,2) NOT NULL DEFAULT 0,   -- deposit + bonus
+  payout_date    DATE          NULL,
+  payment_method ENUM('cash','upi','card','bank','cheque') NOT NULL DEFAULT 'cash',
+  -- The account_ledger cash_out row this payout wrote, so the money is counted
+  -- once and can be traced from either end.
+  ledger_id      CHAR(36)      NULL,
+  agent_id       CHAR(36)      NULL,
+  agent_name     VARCHAR(191)  NULL,
+  notes          TEXT          NULL,
+  created_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  delflag        TINYINT(1)    NOT NULL DEFAULT 0,
+  deleted_at     DATETIME      NULL,
+  deleted_by     CHAR(36)      NULL,
+  INDEX idx_fund_payouts_fund (fund_id),
+  INDEX idx_fund_payouts_customer (customer_id),
+  INDEX idx_fund_payouts_ledger (ledger_id),
+  INDEX idx_fund_payouts_delflag (delflag),
+  -- The recycle bin, soft_delete_cascade() and restore all derive what a delete
+  -- carries with it from the cascading keys; without this one, deleting a fund
+  -- would leave its payouts behind.
+  CONSTRAINT fk_fund_payouts_fund FOREIGN KEY (fund_id)
     REFERENCES funds(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -505,9 +587,18 @@ CREATE TABLE account_ledger (
   agent_name   VARCHAR(191) NULL,
   payment_method VARCHAR(32) NULL,
   created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- Soft delete: 0 = live, 1 = in the recycle bin. Every figure in the account
+  -- book is summed with `WHERE delflag = 0`, so a database imported from this
+  -- file without the column could not compute Cash In Hand at all. It was being
+  -- added by a bootstrap migration and was missing here, which meant a fresh
+  -- install depended on that migration having run before the first request.
+  delflag      TINYINT(1)   NOT NULL DEFAULT 0,
+  deleted_at   DATETIME     NULL,
+  deleted_by   CHAR(36)     NULL,
   INDEX idx_account_ledger_type (entry_type),
   INDEX idx_account_ledger_date (entry_date),
-  INDEX idx_account_ledger_agent (agent_id)
+  INDEX idx_account_ledger_agent (agent_id),
+  INDEX idx_account_ledger_delflag (delflag)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------- promo_popups ----------

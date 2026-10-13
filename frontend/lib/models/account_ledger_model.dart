@@ -88,6 +88,7 @@ class AccountLedgerEntry {
   /// here). False for rows streamed live from `collections`/`fund_payments`
   /// — those are read-only receipts owned by the Loan/Fund screens.
   final bool isCustom;
+  final String sourceTable;
 
   const AccountLedgerEntry({
     required this.id,
@@ -100,6 +101,7 @@ class AccountLedgerEntry {
     this.createdAt,
     this.module = 'ledger',
     this.isCustom = true,
+    this.sourceTable = 'account_ledger',
   });
 
   String get section => LedgerEntryType.isCashInHand(entryType)
@@ -118,6 +120,7 @@ class AccountLedgerEntry {
   }
   String get displayDate =>
       entryDate == null ? '' : DateFormat('d MMM yyyy').format(entryDate!);
+  String get selectionKey => '$sourceTable:$id';
 
   factory AccountLedgerEntry.fromJson(Map<String, dynamic> json) {
     final category = json['category']?.toString() ?? 'General';
@@ -135,6 +138,7 @@ class AccountLedgerEntry {
       createdAt: _toDate(json['created_at']),
       module: json['module']?.toString() ?? _deriveModule(category),
       isCustom: _toBool(json['is_custom'], defaultValue: true),
+      sourceTable: json['source_table']?.toString() ?? 'account_ledger',
     );
   }
 

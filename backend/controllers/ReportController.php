@@ -213,6 +213,13 @@ class ReportController extends Controller
         $stmt->execute();
         $overdueLoans = (int)$stmt->fetchColumn();
 
+        // Interest across every loan, whatever its date or status — the
+        // dashboard's Interest Revenue card. `interest` above stays the
+        // range figure the monthly report uses.
+        $stmt = $pdo->prepare("SELECT COALESCE(SUM(total_interest), 0) FROM loans WHERE delflag = 0");
+        $stmt->execute();
+        $totalInterest = (float)$stmt->fetchColumn();
+
         // --- Collection trend (last 8 months) ---
         $collectionTrend = [];
         for ($i = 7; $i >= 0; $i--) {
@@ -265,6 +272,7 @@ class ReportController extends Controller
                 'new_customers'   => (int)$custAgg['new_customers'],
                 'active_loans'    => $activeLoans,
                 'overdue_loans'   => $overdueLoans,
+                'total_interest'  => $totalInterest,
             ],
             'collection_trend'    => $collectionTrend,
             'disbursement_trend'  => $disbursementTrend,

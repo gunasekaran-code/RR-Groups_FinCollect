@@ -14,6 +14,7 @@ if ($model === null) {
 $controllers = [
     'funds'              => FundController::class,
     'fund_payments'      => FundPaymentController::class,
+    'fund_payouts'       => FundPayoutController::class,
     'handovers'          => HandoverController::class,
     'loans'              => LoanController::class,
     'profiles'           => AgentController::class,

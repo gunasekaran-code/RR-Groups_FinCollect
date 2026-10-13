@@ -13,18 +13,9 @@ import 'package:image_picker/image_picker.dart';
 
 String formatDate(DateTime d) {
   const months = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
+    'Jan',    'Feb',    'Mar',    'Apr',
+    'May',    'Jun',    'Jul',    'Aug',
+    'Sep',    'Oct',    'Nov',    'Dec',
   ];
   final dd = d.day.toString().padLeft(2, '0');
   return '$dd ${months[d.month - 1]} ${d.year}';
@@ -62,9 +53,14 @@ Future<void> showActivePromoPopup(BuildContext context) async {
     barrierColor: Colors.black.withOpacity(0.82),
     builder: (dialogContext) {
       final screenSize = MediaQuery.of(dialogContext).size;
-      final double maxDialogWidth =
-          screenSize.width < 500 ? screenSize.width * 0.92 : 420.0;
-      final double maxDialogHeight = screenSize.height * 0.82;
+      final bool tablet = _isTablet(screenSize.width);
+      // Phone: nearly full width. Tablet: larger card, capped so it doesn't
+      // stretch edge to edge. Height leaves room for the close button.
+      final double maxDialogWidth = tablet
+          ? (screenSize.width * 0.7).clamp(420.0, 560.0)
+          : screenSize.width - 24;
+      final double maxDialogHeight =
+          screenSize.height * (tablet ? 0.85 : 0.8) - 40;
 
       const goldLight = Color(0xFFF5D687);
       const goldMid = Color(0xFFB48629);
@@ -113,11 +109,9 @@ Future<void> showActivePromoPopup(BuildContext context) async {
                       children: [
                         Container(
                           color: Colors.white,
-                          child: _BannerImage(
+                          child: _PromoPopupImage(
                             imageUrl: activePopup!.imageUrl,
-                            width: maxDialogWidth,
-                            height: maxDialogHeight,
-                            fit: BoxFit.contain,
+                            placeholderWidth: maxDialogWidth,
                           ),
                         ),
                         // Advertisement ribbon
@@ -258,6 +252,8 @@ class _PromoPopupScreenState extends State<PromoPopupScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       barrierColor: Colors.black.withOpacity(0.4),
+      // Full width on phones; centered, capped-width sheet on tablets.
+      constraints: const BoxConstraints(maxWidth: 640),
       builder: (context) => _buildSheetFrame(
         child: _PromoPopupFormDialog(existing: existing),
       ),
@@ -362,7 +358,12 @@ class _PromoPopupScreenState extends State<PromoPopupScreen> {
           final width = constraints.maxWidth;
           final narrow = _isNarrow(width);
           final tablet = _isTablet(width);
-          final hPad = narrow ? 12.0 : (tablet ? 24.0 : 16.0);
+          final basePad = narrow ? 12.0 : (tablet ? 24.0 : 16.0);
+          // On wide tablets, cap the content width and center it.
+          const maxContentWidth = 1000.0;
+          final hPad = width > maxContentWidth + basePad * 2
+              ? (width - maxContentWidth) / 2
+              : basePad;
 
           return RefreshIndicator(
             onRefresh: _loadData,
@@ -424,6 +425,7 @@ class _PromoPopupScreenState extends State<PromoPopupScreen> {
                                     _togglePublishState(_activeBanner!, false)
                                 : null,
                             narrow: narrow,
+                            tablet: tablet,
                           ),
                           const SizedBox(height: 24),
                           if (_isAdmin)
@@ -442,12 +444,14 @@ class _PromoPopupScreenState extends State<PromoPopupScreen> {
                                       const Icon(Icons.calendar_today_outlined,
                                           size: 20, color: AppColors.kTextDark),
                                       const SizedBox(width: 8),
-                                      Text(
-                                        'Promotional Banner History (${_popups.length})',
-                                        style: const TextStyle(
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.w700,
-                                          color: AppColors.kTextDark,
+                                      Expanded(
+                                        child: Text(
+                                          'Promotional Banner History (${_popups.length})',
+                                          style: TextStyle(
+                                            fontSize: narrow ? 16 : 18,
+                                            fontWeight: FontWeight.w700,
+                                            color: AppColors.kTextDark,
+                                          ),
                                         ),
                                       ),
                                     ],
@@ -475,20 +479,38 @@ class _PromoPopupScreenState extends State<PromoPopupScreen> {
                                       ),
                                     )
                                   else
-                                    ..._popups.map((p) => Padding(
-                                          padding:
-                                              const EdgeInsets.only(bottom: 16),
-                                          child: _HistoryCard(
-                                            popup: p,
-                                            narrow: narrow,
-                                            onEdit: () =>
-                                                _openManageDialog(existing: p),
-                                            onDelete: () => _deleteBanner(p),
-                                            onToggleActive: () =>
-                                                _togglePublishState(
-                                                    p, !p.isActive),
-                                          ),
-                                        )),
+                                    // 1 column on phones, 2-3 on tablets.
+                                    LayoutBuilder(builder: (context, box) {
+                                      final cols = box.maxWidth >= 860
+                                          ? 3
+                                          : (box.maxWidth >= 520 ? 2 : 1);
+                                      const gap = 16.0;
+                                      final itemWidth =
+                                          ((box.maxWidth - gap * (cols - 1)) /
+                                                  cols)
+                                              .floorToDouble();
+                                      return Wrap(
+                                        spacing: gap,
+                                        runSpacing: gap,
+                                        children: _popups
+                                            .map((p) => SizedBox(
+                                                  width: itemWidth,
+                                                  child: _HistoryCard(
+                                                    popup: p,
+                                                    narrow: narrow,
+                                                    onEdit: () =>
+                                                        _openManageDialog(
+                                                            existing: p),
+                                                    onDelete: () =>
+                                                        _deleteBanner(p),
+                                                    onToggleActive: () =>
+                                                        _togglePublishState(
+                                                            p, !p.isActive),
+                                                  ),
+                                                ))
+                                            .toList(),
+                                      );
+                                    }),
                                 ],
                               ),
                             ),
@@ -510,6 +532,7 @@ class _ActiveBannerHero extends StatelessWidget {
   final VoidCallback? onUpload;
   final VoidCallback? onDisable;
   final bool narrow;
+  final bool tablet;
 
   const _ActiveBannerHero({
     this.activeBanner,
@@ -517,6 +540,7 @@ class _ActiveBannerHero extends StatelessWidget {
     required this.onUpload,
     required this.onDisable,
     required this.narrow,
+    this.tablet = false,
   });
 
   @override
@@ -548,7 +572,10 @@ class _ActiveBannerHero extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Container(
                 padding:
@@ -575,7 +602,6 @@ class _ActiveBannerHero extends StatelessWidget {
                 ),
               ),
               if (hasActive) ...[
-                const SizedBox(width: 12),
                 Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -597,9 +623,9 @@ class _ActiveBannerHero extends StatelessWidget {
           const SizedBox(height: 16),
           Text(
             hasActive ? activeBanner!.title : 'No Banner Currently Active',
-            style: const TextStyle(
+            style: TextStyle(
               color: Colors.white,
-              fontSize: 24,
+              fontSize: narrow ? 20 : (tablet ? 26 : 24),
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -617,59 +643,7 @@ class _ActiveBannerHero extends StatelessWidget {
           ),
           const SizedBox(height: 24),
           if (hasActive && isAdmin)
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                GestureDetector(
-                  onTap: () =>
-                      _showImagePreview(context, activeBanner!.imageUrl),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: _BannerImage(
-                      imageUrl: activeBanner!.imageUrl,
-                      width: narrow ? 120 : 160,
-                      height: narrow ? 80 : 100,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: onDisable,
-                          icon: const Icon(Icons.power_settings_new),
-                          label: const Text('Disable Live Popup'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor:
-                                const Color(0xFF991B1B), // Dark Red
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: onUpload,
-                          icon: const Icon(Icons.add),
-                          label: const Text('Upload Poster'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: Colors.white,
-                            side: const BorderSide(color: Colors.white24),
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              ],
-            )
+            _buildActiveControls(context)
           else if (isAdmin)
             ElevatedButton.icon(
               onPressed: onUpload,
@@ -685,6 +659,79 @@ class _ActiveBannerHero extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+
+  /// Preview + action buttons. Stacked on narrow phones, side by side
+  /// otherwise (with a larger preview on tablets).
+  Widget _buildActiveControls(BuildContext context) {
+    final buttons = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: onDisable,
+            icon: const Icon(Icons.power_settings_new),
+            label: const Text('Disable Live Popup'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF991B1B), // Dark Red
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: onUpload,
+            icon: const Icon(Icons.add),
+            label: const Text('Upload Poster'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white,
+              side: const BorderSide(color: Colors.white24),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+        ),
+      ],
+    );
+
+    Widget preview({required double width, required double height}) =>
+        GestureDetector(
+          onTap: () => _showImagePreview(context, activeBanner!.imageUrl),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: _BannerImage(
+              imageUrl: activeBanner!.imageUrl,
+              width: width,
+              height: height,
+            ),
+          ),
+        );
+
+    if (narrow) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          preview(width: double.infinity, height: 160),
+          const SizedBox(height: 16),
+          buttons,
+        ],
+      );
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        preview(
+          width: tablet ? 220 : 160,
+          height: tablet ? 140 : 100,
+        ),
+        const SizedBox(width: 16),
+        Expanded(child: buttons),
+      ],
     );
   }
 }
@@ -1206,6 +1253,116 @@ class _PromoPopupFormDialogState extends State<_PromoPopupFormDialog> {
 /// UTILS
 /// -----------------------------------------------------------------------
 
+/// Popup poster that sizes itself to the image's own aspect ratio, so the
+/// card hugs the poster (no white letterbox) and scales to fit the parent's
+/// max width/height on both phone and tablet.
+class _PromoPopupImage extends StatefulWidget {
+  final String imageUrl;
+  final double placeholderWidth;
+
+  const _PromoPopupImage({
+    required this.imageUrl,
+    required this.placeholderWidth,
+  });
+
+  @override
+  State<_PromoPopupImage> createState() => _PromoPopupImageState();
+}
+
+class _PromoPopupImageState extends State<_PromoPopupImage> {
+  ImageProvider? _provider;
+  ImageStream? _stream;
+  ImageStreamListener? _listener;
+  double? _aspectRatio;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolve();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PromoPopupImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.imageUrl != widget.imageUrl) {
+      _detach();
+      _aspectRatio = null;
+      _failed = false;
+      _resolve();
+    }
+  }
+
+  void _resolve() {
+    try {
+      if (widget.imageUrl.startsWith('http')) {
+        _provider = NetworkImage(widget.imageUrl);
+      } else if (widget.imageUrl.startsWith('data:image')) {
+        _provider = MemoryImage(base64Decode(widget.imageUrl.split(',').last));
+      }
+    } catch (_) {
+      _provider = null;
+    }
+    if (_provider == null) {
+      _failed = true;
+      return;
+    }
+
+    _listener = ImageStreamListener(
+      (info, _) {
+        if (!mounted) return;
+        final w = info.image.width.toDouble();
+        final h = info.image.height.toDouble();
+        setState(() => _aspectRatio = (w > 0 && h > 0) ? w / h : 1);
+      },
+      onError: (_, __) {
+        if (!mounted) return;
+        setState(() => _failed = true);
+      },
+    );
+    _stream = _provider!.resolve(ImageConfiguration.empty)
+      ..addListener(_listener!);
+  }
+
+  void _detach() {
+    if (_stream != null && _listener != null) {
+      _stream!.removeListener(_listener!);
+    }
+    _stream = null;
+    _listener = null;
+  }
+
+  @override
+  void dispose() {
+    _detach();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_failed) {
+      return SizedBox(
+        width: widget.placeholderWidth,
+        height: 220,
+        child: const Center(
+          child: Icon(Icons.broken_image, color: Colors.grey, size: 40),
+        ),
+      );
+    }
+    if (_aspectRatio == null) {
+      return SizedBox(
+        width: widget.placeholderWidth,
+        height: 220,
+        child: const Center(child: CircularProgressIndicator()),
+      );
+    }
+    return AspectRatio(
+      aspectRatio: _aspectRatio!,
+      child: Image(image: _provider!, fit: BoxFit.contain),
+    );
+  }
+}
+
 /// Safely renders network vs base64 images
 class _BannerImage extends StatelessWidget {
   final String imageUrl;
@@ -1254,29 +1411,41 @@ class _BannerImage extends StatelessWidget {
 void _showImagePreview(BuildContext context, String imageUrl) {
   showDialog(
     context: context,
-    builder: (context) => Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.all(16),
-      child: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.center,
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: _BannerImage(
-                imageUrl: imageUrl, width: double.infinity, height: 400),
-          ),
-          Positioned(
-            top: -16,
-            right: -16,
-            child: FloatingActionButton.small(
-              onPressed: () => Navigator.pop(context),
-              backgroundColor: Colors.white,
-              child: const Icon(Icons.close, color: Colors.black),
+    builder: (context) {
+      final screen = MediaQuery.of(context).size;
+      // Fit the poster on screen: near full width on phones, capped on tablets.
+      final double maxWidth = _isTablet(screen.width)
+          ? (screen.width * 0.8).clamp(420.0, 720.0)
+          : screen.width - 32;
+      final double maxHeight = screen.height * 0.85 - 32;
+      return Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(16),
+        child: Stack(
+          clipBehavior: Clip.none,
+          alignment: Alignment.center,
+          children: [
+            ConstrainedBox(
+              constraints:
+                  BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: _PromoPopupImage(
+                    imageUrl: imageUrl, placeholderWidth: maxWidth),
+              ),
             ),
-          ),
-        ],
-      ),
-    ),
+            Positioned(
+              top: -16,
+              right: -16,
+              child: FloatingActionButton.small(
+                onPressed: () => Navigator.pop(context),
+                backgroundColor: Colors.white,
+                child: const Icon(Icons.close, color: Colors.black),
+              ),
+            ),
+          ],
+        ),
+      );
+    },
   );
 }

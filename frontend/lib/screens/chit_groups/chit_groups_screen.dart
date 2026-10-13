@@ -7,9 +7,9 @@ import '../../theme/app_theme.dart';
 import '../../theme/glass_toast.dart';
 import '../../theme/confirm_dialog.dart';
 import '../../widgets/app_shell.dart';
-import '../../widgets/page_header.dart';
 import '../../models/chit_group.dart';
 import '../../models/chit_member.dart';
+import '../../models/chit_passbook.dart';
 import '../../models/user_role.dart';
 import '../../services/chit_group_api_service.dart';
 import '../../services/session_service.dart';
@@ -18,6 +18,7 @@ import 'package:intl/intl.dart';
 import '../../models/chit_schedule.dart';
 import '../../models/chit_auction.dart';
 import '../../l10n/generated/app_localizations.dart';
+import '../../widgets/responsive_stat_grid.dart';
 
 // Shared paid/partial/overdue/pending pill styling — used by the Member
 // Collections table row and the Installment Schedule's payment status
@@ -191,8 +192,7 @@ class _OverrideScheduleSheetState extends State<_OverrideScheduleSheet> {
                 const SizedBox(height: 24),
                 _overrideField(l10n.payableAmountLabel, _payableController),
                 const SizedBox(height: 16),
-                _overrideField(
-                    l10n.poolDividendValueLabel, _poolController),
+                _overrideField(l10n.poolDividendValueLabel, _poolController),
                 const SizedBox(height: 16),
                 Text(l10n.dueDateLabel,
                     style: const TextStyle(
@@ -231,8 +231,7 @@ class _OverrideScheduleSheetState extends State<_OverrideScheduleSheet> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                _overrideField(l10n.notesLabel, _notesController,
-                    maxLines: 2),
+                _overrideField(l10n.notesLabel, _notesController, maxLines: 2),
                 const SizedBox(height: 32),
                 Row(
                   children: [
@@ -247,7 +246,8 @@ class _OverrideScheduleSheetState extends State<_OverrideScheduleSheet> {
                           side: const BorderSide(color: Color(0xFFE2E8F0)),
                         ),
                         child: Text(l10n.cancelButton,
-                            style: const TextStyle(fontWeight: FontWeight.w600)),
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w600)),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -451,11 +451,16 @@ class _ChitGroupsScreenState extends State<ChitGroupsScreen> {
   bool get _isAgent => _role == UserRole.agent;
   bool get _isCustomer => _role == UserRole.customer;
 
+  /// Client-side status filter; null shows every group.
+  ChitGroupStatus? _statusFilter;
+
   List<ChitGroup> get _filteredGroups {
     final query = _searchCtrl.text.trim().toLowerCase();
-    if (query.isEmpty) return _groups;
-
     return _groups.where((group) {
+      if (_statusFilter != null && group.status != _statusFilter) {
+        return false;
+      }
+      if (query.isEmpty) return true;
       return group.name.toLowerCase().contains(query) ||
           group.code.toLowerCase().contains(query);
     }).toList();
@@ -599,6 +604,7 @@ class _ChitGroupsScreenState extends State<ChitGroupsScreen> {
     final l10n = AppLocalizations.of(context);
     final visibleGroups = _filteredGroups;
     final hasSearchQuery = _searchCtrl.text.trim().isNotEmpty;
+    final isFiltered = hasSearchQuery || _statusFilter != null;
 
     return AppShell(
       currentRoute: AppRoutes.chitGroups,
@@ -607,300 +613,520 @@ class _ChitGroupsScreenState extends State<ChitGroupsScreen> {
         color: Theme.of(context).scaffoldBackgroundColor,
         child: RefreshIndicator(
           onRefresh: _loadGroups,
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              PageHeader(
-                title: l10n.chitGroupsTitle,
-                subtitle: l10n.chitGroupsSubtitle,
-                actions: [
-                  if (_isAdmin)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: SizedBox(
-                        width: 150,
-                        child: ElevatedButton.icon(
-                          onPressed: _showCreateGroupModal,
-                          icon: const Icon(Icons.add),
-                          label: Text(
-                            l10n.createGroupButton,
-                            style: const TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                          ),
-                        ),
+          child: LayoutBuilder(builder: (context, constraints) {
+            final width = constraints.maxWidth;
+            final isNarrow = width < 700;
+            final gutter = width < 600 ? 16.0 : 24.0;
+
+            return ListView(
+              padding: EdgeInsets.fromLTRB(gutter, 16, gutter, 32),
+              children: [
+                _buildHeader(isNarrow, l10n),
+                const SizedBox(height: 16),
+                _buildSearchAndFilters(isNarrow, hasSearchQuery, l10n),
+                const SizedBox(height: 20),
+                if (!_isLoading && _loadError == null) _buildStatGrid(),
+                if (_isLoading)
+                  const Center(child: CircularProgressIndicator())
+                else if (_loadError != null)
+                  Column(
+                    children: [
+                      Text(_loadError!,
+                          style: const TextStyle(color: AppColors.kDanger)),
+                      const SizedBox(height: 12),
+                      ElevatedButton(
+                        onPressed: _loadGroups,
+                        child: Text(l10n.retryButton),
                       ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                    color: AppColors.kSurface,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppColors.kBorder)),
-                child: TextField(
-                  controller: _searchCtrl,
-                  onChanged: (_) => setState(() {}),
-                  decoration: InputDecoration(
-                    hintText: l10n.searchHint,
-                    prefixIcon: const Icon(Icons.search, size: 20),
-                    suffixIcon: hasSearchQuery
-                        ? IconButton(
-                            tooltip: l10n.clearSearchTooltip,
-                            onPressed: () {
-                              _searchCtrl.clear();
-                              setState(() {});
-                            },
-                            icon: const Icon(Icons.clear, size: 20),
-                          )
-                        : null,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              if (_isLoading)
-                const Center(child: CircularProgressIndicator())
-              else if (_loadError != null)
-                Column(
-                  children: [
-                    Text(_loadError!,
-                        style: const TextStyle(color: AppColors.kDanger)),
-                    const SizedBox(height: 12),
-                    ElevatedButton(
-                      onPressed: _loadGroups,
-                      child: Text(l10n.retryButton),
-                    ),
-                  ],
-                )
-              else if (visibleGroups.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 40),
-                  child: Center(
-                    child: Text(
-                      hasSearchQuery
-                          ? l10n.noSearchResultsMessage
-                          : _isCustomer
-                              ? l10n.customerNoGroupMessage
-                              : l10n.noGroupsFoundMessage,
-                    ),
-                  ),
-                )
-              else
-                ...visibleGroups
-                    .map((group) => _buildGroupCard(group))
-                    ,
-            ],
-          ),
+                    ],
+                  )
+                else if (visibleGroups.isEmpty)
+                  _buildEmptyState(isFiltered
+                      ? l10n.noSearchResultsMessage
+                      : _isCustomer
+                          ? l10n.customerNoGroupMessage
+                          : l10n.noGroupsFoundMessage)
+                // Phone: single card column. Tablet: two card columns.
+                // Wide: full table.
+                else if (width >= 1000)
+                  _buildGroupTable(visibleGroups, l10n)
+                else
+                  ..._buildCardRows(visibleGroups,
+                      columns: width < 600 ? 1 : 2),
+              ],
+            );
+          }),
         ),
       ),
     );
   }
 
-Widget _buildGroupCard(ChitGroup group) {
-    final l10n = AppLocalizations.of(context);
-    
-    return GestureDetector(
-      onTap: () => _openGroupDetails(group),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 16), // Outer spacing between cards
-        // 1. Asymmetric outer padding gives better bottom weight for the action buttons
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 24), 
+  Widget _buildHeader(bool isNarrow, AppLocalizations l10n) {
+    final subtitle = Text(
+      l10n.chitGroupsSubtitle,
+      style: const TextStyle(fontSize: 14, color: AppColors.kTextMuted),
+    );
+    final createButton = ElevatedButton.icon(
+      onPressed: _showCreateGroupModal,
+      icon: const Icon(Icons.add),
+      label: Text(
+        l10n.createGroupButton,
+        style: const TextStyle(fontWeight: FontWeight.w600),
+      ),
+      style: ElevatedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      ),
+    );
+
+    if (isNarrow || !_isAdmin) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          subtitle,
+          if (_isAdmin) ...[
+            const SizedBox(height: 16),
+            createButton,
+          ],
+        ],
+      );
+    }
+    return Row(
+      children: [
+        Expanded(child: subtitle),
+        const SizedBox(width: 16),
+        createButton,
+      ],
+    );
+  }
+
+  Widget _buildSearchAndFilters(
+      bool isNarrow, bool hasSearchQuery, AppLocalizations l10n) {
+    final scheme = Theme.of(context).colorScheme;
+    final searchField = TextField(
+      controller: _searchCtrl,
+      onChanged: (_) => setState(() {}),
+      decoration: InputDecoration(
+        hintText: l10n.searchHint,
+        isDense: true,
+        prefixIcon: const Icon(Icons.search, size: 20),
+        suffixIcon: hasSearchQuery
+            ? IconButton(
+                tooltip: l10n.clearSearchTooltip,
+                onPressed: () {
+                  _searchCtrl.clear();
+                  setState(() {});
+                },
+                icon: const Icon(Icons.clear, size: 20),
+              )
+            : null,
+      ),
+    );
+
+    final filters = <ChitGroupStatus?>[null, ...ChitGroupStatus.values];
+    final filterRow = SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: filters.map((status) {
+          final isSelected = _statusFilter == status;
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: ChoiceChip(
+              label: Text(status == null
+                  ? l10n.filterAll
+                  : _chitStatusLabel(status, l10n)),
+              selected: isSelected,
+              showCheckmark: false,
+              selectedColor: scheme.primary,
+              backgroundColor: AppColors.kSurface,
+              shape: StadiumBorder(
+                side: BorderSide(
+                  color: isSelected ? scheme.primary : AppColors.kBorder,
+                ),
+              ),
+              labelStyle: TextStyle(
+                color: isSelected ? Colors.white : scheme.onSurface,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              ),
+              onSelected: (_) => setState(() => _statusFilter = status),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+
+    if (isNarrow) {
+      return Container(
+        padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
-          borderRadius: BorderRadius.circular(24), 
+          color: scheme.surface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.kBorder),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 16,
+              color: AppColors.ink900.withValues(alpha: 0.04),
+              blurRadius: 12,
               offset: const Offset(0, 4),
             ),
           ],
-          border: Border.all(color: AppColors.kBorder.withOpacity(0.3)),
         ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // --- HEADER SECTION ---
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+            searchField,
+            const SizedBox(height: 12),
+            filterRow,
+          ],
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        Expanded(flex: 2, child: searchField),
+        const SizedBox(width: 16),
+        Expanded(flex: 3, child: filterRow),
+      ],
+    );
+  }
+
+  Widget _buildEmptyState(String message) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 40),
+      child: Column(
+        children: [
+          Container(
+            width: 64,
+            height: 64,
+            decoration: const BoxDecoration(
+              color: AppColors.gold50,
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.groups_outlined,
+                size: 30, color: AppColors.kGold),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                color: AppColors.kTextMuted, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // For a customer `_groups` holds only the groups they are a member of, so
+  // every card below is worked out from their own groups.
+  Widget _buildStatGrid() {
+    final totalGroups = _groups.length;
+    final activeGroups =
+        _groups.where((g) => g.status == ChitGroupStatus.active).length;
+    final totalValue = _groups.fold<double>(0, (sum, g) => sum + g.groupValue);
+    final totalCollected =
+        _groups.fold<double>(0, (sum, g) => sum + g.collectedAmount);
+    // A group's collected total is everyone's money, not the customer's, so
+    // customers see what they pay each month across their running groups.
+    final monthlyContribution = _groups
+        .where((g) => g.status == ChitGroupStatus.active)
+        .fold<double>(0, (sum, g) => sum + g.monthlyContribution);
+
+    return Column(
+      children: [
+        ResponsiveStatGrid(
+          children: [
+            _StatCard(
+              icon: Icons.groups_outlined,
+              iconBg: const Color(0xFFFEF3C7),
+              iconColor: AppColors.kWarning,
+              label: _isCustomer ? 'MY GROUPS' : 'TOTAL GROUPS',
+              value: '$totalGroups',
+            ),
+            _StatCard(
+              icon: Icons.trending_up_rounded,
+              iconBg: const Color(0xFFDCFCE7),
+              iconColor: AppColors.kSuccess,
+              label: 'ACTIVE GROUPS',
+              value: '$activeGroups',
+            ),
+            _StatCard(
+              icon: Icons.account_balance_wallet_outlined,
+              iconBg: const Color(0xFFEDE9FE),
+              iconColor: const Color(0xFF7C3AED),
+              label: _isCustomer ? 'TOTAL CHIT VALUE' : 'TOTAL VALUE',
+              value: formatIndianCurrency(totalValue),
+            ),
+            _StatCard(
+              icon: Icons.monetization_on_outlined,
+              iconBg: const Color(0xFFFEF3C7),
+              iconColor: AppColors.kGold,
+              label: _isCustomer ? 'MONTHLY CONTRIBUTION' : 'TOTAL COLLECTED',
+              value: formatIndianCurrency(
+                  _isCustomer ? monthlyContribution : totalCollected),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+
+  List<Widget> _buildCardRows(List<ChitGroup> groups, {required int columns}) {
+    if (columns == 1) {
+      return [
+        for (final g in groups)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: _buildGroupCard(g),
+          ),
+      ];
+    }
+
+    final rows = <Widget>[];
+    for (var start = 0; start < groups.length; start += columns) {
+      rows.add(Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        // Cards in a row share a height, with actions pinned to the bottom.
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < columns; i++) ...[
+                if (i > 0) const SizedBox(width: 14),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: start + i < groups.length
+                      ? _buildGroupCard(groups[start + i], fillHeight: true)
+                      : const SizedBox.shrink(),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ));
+    }
+    return rows;
+  }
+
+  Widget _buildGroupCard(ChitGroup group, {bool fillHeight = false}) {
+    final l10n = AppLocalizations.of(context);
+    final percent = (group.collectedPercent / 100).clamp(0, 1).toDouble();
+
+    Widget metric(String label, String value) => Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 11, color: AppColors.kTextMuted)),
+              const SizedBox(height: 3),
+              Text(value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.kTextDark)),
+            ],
+          ),
+        );
+
+    Widget action(
+            IconData icon, String label, Color color, VoidCallback onTap) =>
+        Expanded(
+          child: TextButton.icon(
+            onPressed: onTap,
+            icon: Icon(icon, size: 18),
+            label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+            style: TextButton.styleFrom(
+              foregroundColor: color,
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              textStyle:
+                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              shape: const RoundedRectangleBorder(),
+            ),
+          ),
+        );
+
+    return GestureDetector(
+      onTap: () => _openGroupDetails(group),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.kSurface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.kBorder),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.ink900.withValues(alpha: 0.05),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Gold header strip — group no., name, plan and status.
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: _kGoldGradient,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppColors.kGold.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                          color: AppColors.kGoldLight.withValues(alpha: 0.5)),
+                    ),
+                    child: Text(
+                      group.code,
+                      style: const TextStyle(
+                        color: AppColors.gold200,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          group.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppColors.kTextOnDark,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${formatIndianCurrency(group.monthlyContribution)}'
+                          ' × ${l10n.durationMonthsShort(group.durationMonths)}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: AppColors.kTextOnDarkMuted, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _chitStatusPill(group.status, l10n),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(l10n.chitColGroupValue,
+                      style: const TextStyle(
+                          fontSize: 11, color: AppColors.kTextMuted)),
+                  const SizedBox(height: 2),
+                  Text(
+                    formatIndianCurrency(group.groupValue),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.kGoldDark,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: AppColors.kBackground,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        metric(l10n.membersLabel, '${group.totalMembers}'),
+                        metric(l10n.durationLabel,
+                            l10n.durationMonthsShort(group.durationMonths)),
+                        metric(l10n.chitColStartDate,
+                            _formatChitDate(group.startDate)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
                     children: [
-                      Text(
-                        group.name,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -0.5,
-                          color: AppColors.kTextDark,
+                      Expanded(
+                        child: Text(
+                          l10n.collectionProgressLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.kTextMuted),
                         ),
                       ),
-                      const SizedBox(height: 4), // Tight spacing for related text
+                      const SizedBox(width: 8),
                       Text(
-                        l10n.groupNumberLabel(group.code),
+                        '${formatIndianCurrency(group.collectedAmount)} · '
+                        '${group.collectedPercent.toStringAsFixed(1)}%',
                         style: const TextStyle(
-                          color: AppColors.kTextMuted, 
-                          fontSize: 13,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.kGoldDark,
                         ),
                       ),
                     ],
                   ),
-                ),
-                // 2. Refined status pill padding to prevent it from looking overly bulky
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: group.status == ChitGroupStatus.active
-                        ? AppColors.kSuccess.withOpacity(0.1)
-                        : const Color(0xFFF3F4F6),
+                  const SizedBox(height: 6),
+                  ClipRRect(
                     borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    group.status.name.toUpperCase(),
-                    style: TextStyle(
-                      color: group.status == ChitGroupStatus.active
-                          ? AppColors.kSuccess
-                          : AppColors.kTextMuted,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.5, // Added slight letter spacing for all-caps
+                    child: LinearProgressIndicator(
+                      value: percent,
+                      minHeight: 6,
+                      backgroundColor: AppColors.gold50,
+                      valueColor: const AlwaysStoppedAnimation(AppColors.kGold),
                     ),
                   ),
-                ),
-              ],
-            ),
-            
-            const SizedBox(height: 24), // 3. Increased section break spacing
-
-            // --- INFO STATS SECTION ---
-            Container(
-              // 4. Wider horizontal padding inside the info box to balance the row
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(16), // Softened slightly to match outer radius
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  _InfoItem(
-                      label: l10n.membersLabel,
-                      value: '${group.totalMembers}'),
-                  _InfoItem(
-                      label: l10n.durationLabel,
-                      value: l10n.durationMonthsShort(group.durationMonths)),
-                  _InfoItem(
-                      label: l10n.valueLabel,
-                      value: formatIndianCurrency(group.groupValue)),
                 ],
               ),
             ),
-            
-            const SizedBox(height: 24), // Increased section break spacing
-
-            // --- PROGRESS SECTION ---
+            if (fillHeight) const Spacer(),
+            const Divider(height: 1),
+            // Role-specific action strip:
+            // - admin: View Details + Edit + Delete
+            // - agent: Collect
+            // - customer: View Passbook
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  l10n.collectionProgressLabel,
-                  style: const TextStyle(
-                    fontSize: 12, 
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                Text(
-                  '${group.collectedPercent.toStringAsFixed(1)}%',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.kGold,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10), // 5. Slightly larger gap to let the bar breathe
-            ClipRRect(
-              borderRadius: BorderRadius.circular(999),
-              child: LinearProgressIndicator(
-                value: (group.collectedPercent / 100).clamp(0, 1).toDouble(),
-                minHeight: 8,
-                backgroundColor: const Color(0xFFEEEDE9),
-                valueColor: const AlwaysStoppedAnimation(AppColors.kGold),
-              ),
-            ),
-            
-            const SizedBox(height: 24), // Section break to buttons
-
-            // --- ACTION BUTTONS SECTION ---
-            Wrap(
-              spacing: 12, // Horizontal space between buttons
-              runSpacing: 12, // Vertical space if they wrap
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                if (_isAdmin || _isAgent)
-                  ElevatedButton.icon(
-                    onPressed: () => _openGroupDetails(group),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.kGold,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      // 6. Reduced vertical padding slightly for a sleeker button profile
-                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                    icon: Icon(
-                        _isAdmin
-                            ? Icons.visibility_outlined
-                            : Icons.currency_rupee,
-                        size: 18),
-                    label: Text(
-                      _isAdmin ? l10n.viewDetailsButton : l10n.collectButton,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
+                if (_isAdmin)
+                  action(Icons.visibility_outlined, l10n.viewDetailsButton,
+                      AppColors.kGoldDark, () => _openGroupDetails(group)),
+                if (_isAgent)
+                  action(Icons.currency_rupee, l10n.collectButton,
+                      AppColors.kGoldDark, () => _openGroupDetails(group)),
                 if (_isCustomer)
-                  ElevatedButton.icon(
-                    onPressed: () => _openGroupDetails(group),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.kGold,
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                    ),
-                    icon: const Icon(Icons.menu_book_rounded, size: 18),
-                    label: Text(
-                      l10n.viewPassbookButton,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ),
+                  action(Icons.menu_book_rounded, l10n.viewPassbookButton,
+                      AppColors.kGoldDark, () => _openGroupDetails(group)),
                 if (_isAdmin) ...[
-                  IconButton(
-                    style: IconButton.styleFrom(
-                      backgroundColor: const Color(0xFFF1F5F9),
-                      padding: const EdgeInsets.all(12), // Explicit icon padding
-                    ),
-                    icon: const Icon(Icons.edit, color: AppColors.kTextDark, size: 20),
-                    onPressed: () => _showEditGroupModal(group),
-                  ),
-                  IconButton(
-                    style: IconButton.styleFrom(
-                      backgroundColor: const Color(0xFFFEF2F2),
-                      padding: const EdgeInsets.all(12),
-                    ),
-                    icon: const Icon(Icons.delete_outline, color: AppColors.kDanger, size: 20),
-                    onPressed: () => _confirmDeleteGroup(group),
-                  ),
+                  action(Icons.edit_outlined, l10n.chitActionEdit,
+                      AppColors.ink700, () => _showEditGroupModal(group)),
+                  action(Icons.delete_outline, l10n.deleteButton,
+                      AppColors.kDanger, () => _confirmDeleteGroup(group)),
                 ],
               ],
             ),
@@ -909,29 +1135,252 @@ Widget _buildGroupCard(ChitGroup group) {
       ),
     );
   }
-}
 
-class _InfoItem extends StatelessWidget {
-  final String label;
-  final String value;
-  const _InfoItem({required this.label, required this.value});
+  static const double _tableHeadingHeight = 50;
 
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(label,
-            style: const TextStyle(fontSize: 11, color: AppColors.kTextMuted)),
-        const SizedBox(height: 4),
-        Text(value,
+  Widget _buildGroupTable(List<ChitGroup> groups, AppLocalizations l10n) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.kSurface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.kBorder),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.ink900.withValues(alpha: 0.05),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: LayoutBuilder(builder: (context, constraints) {
+          final table = DataTable(
+            // Transparent so the gold gradient strip painted behind it shows
+            // through.
+            headingRowColor: WidgetStateProperty.all(Colors.transparent),
+            headingRowHeight: _tableHeadingHeight,
+            dataRowMinHeight: 58,
+            dataRowMaxHeight: 64,
+            columnSpacing: 24,
+            dividerThickness: 0.6,
+            showCheckboxColumn: false,
+            headingTextStyle: const TextStyle(
+              color: AppColors.kTextOnDark,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+              letterSpacing: 0.3,
+            ),
+            dataTextStyle:
+                const TextStyle(color: AppColors.kTextDark, fontSize: 13),
+            columns: [
+              DataColumn(label: Text(l10n.chitColGroupNo)),
+              // The name column soaks up spare width so the table always
+              // spans the card.
+              DataColumn(
+                label: Text(l10n.chitColGroupName),
+                columnWidth: const MaxColumnWidth(
+                    IntrinsicColumnWidth(), FlexColumnWidth()),
+              ),
+              DataColumn(label: Text(l10n.membersLabel)),
+              DataColumn(label: Text(l10n.durationLabel)),
+              DataColumn(label: Text(l10n.chitColMonthly)),
+              DataColumn(label: Text(l10n.valueLabel)),
+              DataColumn(label: Text(l10n.chitColCollected)),
+              DataColumn(label: Text(l10n.chitColStartDate)),
+              DataColumn(label: Text(l10n.chitColStatus)),
+              DataColumn(label: Text(l10n.chitColActions)),
+            ],
+            rows: [
+              for (var i = 0; i < groups.length; i++)
+                _buildGroupRow(groups[i], i, l10n),
+            ],
+          );
+
+          return Scrollbar(
+            thumbVisibility: true,
+            trackVisibility: true,
+            notificationPredicate: (notification) => notification.depth == 0,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const ClampingScrollPhysics(),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                child: Stack(
+                  fit: StackFit.passthrough,
+                  children: [
+                    // DataTable can't take a gradient, so paint the header
+                    // strip (same gold as the group cards) behind the table.
+                    const Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: _tableHeadingHeight,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                            colors: _kGoldGradient,
+                          ),
+                        ),
+                      ),
+                    ),
+                    table,
+                  ],
+                ),
+              ),
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
+  DataRow _buildGroupRow(ChitGroup group, int index, AppLocalizations l10n) {
+    final percent = (group.collectedPercent / 100).clamp(0, 1).toDouble();
+
+    Widget iconAction(
+            IconData icon, Color color, String tooltip, VoidCallback onTap) =>
+        IconButton(
+          icon: Icon(icon, size: 20),
+          color: color,
+          tooltip: tooltip,
+          onPressed: onTap,
+        );
+
+    return DataRow(
+      color: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.hovered)) return AppColors.gold50;
+        return index.isOdd ? AppColors.kBackground : AppColors.kSurface;
+      }),
+      onSelectChanged: (_) => _openGroupDetails(group),
+      cells: [
+        DataCell(Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: AppColors.gold50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppColors.gold200),
+          ),
+          child: Text(group.code,
+              style: const TextStyle(
+                  fontWeight: FontWeight.w700, color: AppColors.kGoldDark)),
+        )),
+        DataCell(Text(group.name,
+            style: const TextStyle(fontWeight: FontWeight.w600))),
+        DataCell(Text('${group.totalMembers}')),
+        DataCell(Text(l10n.durationMonthsShort(group.durationMonths))),
+        DataCell(Text(formatIndianCurrency(group.monthlyContribution))),
+        DataCell(Text(formatIndianCurrency(group.groupValue),
             style: const TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: AppColors.kTextDark)),
+                fontWeight: FontWeight.w700, color: AppColors.kGoldDark))),
+        DataCell(Column(
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${formatIndianCurrency(group.collectedAmount)} · '
+                '${group.collectedPercent.toStringAsFixed(1)}%'),
+            const SizedBox(height: 5),
+            SizedBox(
+              width: 96,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(999),
+                child: LinearProgressIndicator(
+                  value: percent,
+                  minHeight: 5,
+                  backgroundColor: AppColors.gold50,
+                  valueColor: const AlwaysStoppedAnimation(AppColors.kGold),
+                ),
+              ),
+            ),
+          ],
+        )),
+        DataCell(Text(_formatChitDate(group.startDate))),
+        DataCell(_chitStatusPill(group.status, l10n)),
+        DataCell(Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (_isAdmin)
+              iconAction(Icons.visibility_outlined, AppColors.kGoldDark,
+                  l10n.viewDetailsButton, () => _openGroupDetails(group)),
+            if (_isAgent)
+              iconAction(Icons.currency_rupee, AppColors.kGoldDark,
+                  l10n.collectButton, () => _openGroupDetails(group)),
+            if (_isCustomer)
+              iconAction(Icons.menu_book_rounded, AppColors.kGoldDark,
+                  l10n.viewPassbookButton, () => _openGroupDetails(group)),
+            if (_isAdmin) ...[
+              iconAction(Icons.edit_outlined, AppColors.ink600,
+                  l10n.chitActionEdit, () => _showEditGroupModal(group)),
+              iconAction(Icons.delete_outline, AppColors.kDanger,
+                  l10n.deleteButton, () => _confirmDeleteGroup(group)),
+            ],
+          ],
+        )),
       ],
     );
   }
+}
+
+/// Same gold strip as the loan/fund cards and table headers.
+const List<Color> _kGoldGradient = [Color(0xFFA9791F), Color(0xFFC48E28)];
+
+String _formatChitDate(DateTime date) =>
+    DateFormat('dd MMM yyyy').format(date);
+
+String _chitStatusLabel(ChitGroupStatus status, AppLocalizations l10n) {
+  switch (status) {
+    case ChitGroupStatus.active:
+      return l10n.chitStatusActive;
+    case ChitGroupStatus.completed:
+      return l10n.chitStatusCompleted;
+    case ChitGroupStatus.upcoming:
+      return l10n.chitStatusUpcoming;
+  }
+}
+
+Widget _chitStatusPill(ChitGroupStatus status, AppLocalizations l10n) {
+  final Color dot;
+  switch (status) {
+    case ChitGroupStatus.active:
+      dot = AppColors.kSuccess;
+      break;
+    case ChitGroupStatus.completed:
+      dot = AppColors.kTextMuted;
+      break;
+    case ChitGroupStatus.upcoming:
+      dot = AppColors.kWarning;
+      break;
+  }
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+    decoration: BoxDecoration(
+      color: AppColors.gold100,
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: AppColors.gold300),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          _chitStatusLabel(status, l10n),
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: AppColors.gold800,
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _ScheduleItemConfig {
@@ -976,6 +1425,7 @@ class _GroupFormSheetState extends State<_GroupFormSheet> {
 
   List<_ScheduleItemConfig> _scheduleConfigs = [];
   bool _loadingSchedule = false;
+  String _schemeKey = '';
 
   @override
   void initState() {
@@ -999,6 +1449,10 @@ class _GroupFormSheetState extends State<_GroupFormSheet> {
     // calendar month, not a fixed day gap, so the interval field starts blank.
     _drawIntervalCtrl = TextEditingController();
     if (group != null) _status = group.status;
+    if (group != null) {
+      _drawFrequency = _frequencyLabelFromBackend(group.drawFrequency);
+      _drawIntervalCtrl.text = group.drawDays ?? '';
+    }
 
     _durationCtrl.addListener(_recalculateSchedule);
     _valueCtrl.addListener(_recalculateSchedule);
@@ -1108,37 +1562,39 @@ class _GroupFormSheetState extends State<_GroupFormSheet> {
             30);
 
     final newConfigs = <_ScheduleItemConfig>[];
-    for (int i = 1; i <= duration; i++) {
+    final startsAtZero = _schemeKey == '5000';
+    final firstDraw = startsAtZero ? 0 : 1;
+    for (int index = 0; index < duration; index++) {
+      final i = firstDraw + index;
       DateTime date;
       bool isCustom = false;
-      if (i - 1 < _scheduleConfigs.length &&
-          _scheduleConfigs[i - 1].isCustomDate) {
+      if (index < _scheduleConfigs.length &&
+          _scheduleConfigs[index].isCustomDate) {
         // A date the admin hand-picked in the schedule list below always
         // wins, regardless of frequency.
-        date = _scheduleConfigs[i - 1].dueDate;
+        date = _scheduleConfigs[index].dueDate;
         isCustom = true;
       } else if (_isCustomCalendarDays) {
         // No auto-computed gap — keep the previous value as a starting
         // point (monthly-spaced) so there's something to edit per row.
-        date = i - 1 < _scheduleConfigs.length
-            ? _scheduleConfigs[i - 1].dueDate
-            : DateTime(startDate.year, startDate.month + (i - 1), startDate.day);
+        date = index < _scheduleConfigs.length
+            ? _scheduleConfigs[index].dueDate
+            : DateTime(startDate.year, startDate.month + index, startDate.day);
       } else if (_isMonthly) {
         date = DateTime(
           startDate.year,
-          startDate.month + (i - 1),
+          startDate.month + index,
           startDate.day,
         );
       } else {
-        date = startDate.add(Duration(days: intervalDays! * (i - 1)));
+        date = startDate.add(Duration(days: intervalDays! * index));
       }
+      final payableAmount = _schemePayableAmount(i, contribution);
       newConfigs.add(_ScheduleItemConfig(
         installmentNo: i,
         dueDate: date,
-        payableAmount: contribution > 0
-            ? contribution
-            : (duration > 0 ? groupVal / duration : 0),
-        poolAmount: groupVal,
+        payableAmount: payableAmount,
+        poolAmount: _schemePoolAmount(i, groupVal),
         isCustomDate: isCustom,
       ));
     }
@@ -1150,6 +1606,11 @@ class _GroupFormSheetState extends State<_GroupFormSheet> {
 
   void _applyPreset(_SchemePreset preset) {
     setState(() {
+      _schemeKey = preset.monthlyContribution == 750
+          ? '750'
+          : preset.monthlyContribution == 1420
+              ? '1420'
+              : '5000';
       _nameCtrl.text = preset.groupName;
       _membersCtrl.text = preset.totalMembers.toString();
       _durationCtrl.text = preset.durationMonths.toString();
@@ -1159,6 +1620,64 @@ class _GroupFormSheetState extends State<_GroupFormSheet> {
       _drawIntervalCtrl.text = preset.drawInterval.toString();
     });
     _recalculateSchedule();
+  }
+
+  double _schemePayableAmount(int drawNo, double base) {
+    if (_schemeKey == '1420' ||
+        (base == 1420 && _drawIntervalCtrl.text == '10')) {
+      return 1420 + (drawNo - 1) * 20;
+    }
+    if (_schemeKey == '750' || (base == 750 && _drawIntervalCtrl.text == '5')) {
+      return drawNo <= 5 ? 750 : 750 + (drawNo - 5) * 10;
+    }
+    if (_schemeKey == '5000' || base == 5000) return 5000;
+    return base > 0 ? base : 0;
+  }
+
+  double _schemePoolAmount(int drawNo, double groupValue) {
+    if (_schemeKey == '1420' ||
+        (groupValue == 57000 && _drawIntervalCtrl.text == '10')) {
+      return 39600 + (drawNo - 1) * 600;
+    }
+    if (_schemeKey == '750' ||
+        (groupValue == 28500 && _drawIntervalCtrl.text == '5')) {
+      return drawNo <= 5 ? 21000 : 21000 + (drawNo - 5) * 300;
+    }
+    if (_schemeKey == '5000' || groupValue == 125000) {
+      if (drawNo == 0) return 0;
+      if (drawNo <= 9) return 79000 + drawNo * 1000;
+      if (drawNo <= 15) return 80000 + drawNo * 1000;
+      return 25000 + drawNo * 5000;
+    }
+    return groupValue;
+  }
+
+  String _backendFrequency() {
+    if (_schemeKey == '750') return 'every_5_days';
+    if (_schemeKey == '1420') return 'every_10_days';
+    if (_schemeKey == '5000') return 'monthly_1';
+    if (_drawFrequency == 'Every 10 Days') return 'every_10_days';
+    if (_drawFrequency == 'Custom Day Interval') return 'interval_days';
+    if (_drawFrequency == '2 Draws / Month (Bi-Monthly)') return 'monthly_2';
+    if (_drawFrequency == '3 Draws / Month (Tri-Monthly)') return 'monthly_3';
+    return 'monthly_1';
+  }
+
+  String _frequencyLabelFromBackend(String value) {
+    switch (value) {
+      case 'every_5_days':
+        return 'Custom Day Interval';
+      case 'every_10_days':
+        return 'Every 10 Days';
+      case 'monthly_2':
+        return '2 Draws / Month (Bi-Monthly)';
+      case 'monthly_3':
+        return '3 Draws / Month (Tri-Monthly)';
+      case 'interval_days':
+        return 'Custom Day Interval';
+      default:
+        return '1 Draw / Month (Monthly)';
+    }
   }
 
   Future<void> _pickStartDate() async {
@@ -1197,6 +1716,10 @@ class _GroupFormSheetState extends State<_GroupFormSheet> {
       monthlyContribution: double.tryParse(_contributionCtrl.text.trim()) ?? 0,
       startDate: _startDate!,
       collectedAmount: widget.group?.collectedAmount ?? 0,
+      drawFrequency: _backendFrequency(),
+      drawDays: _drawIntervalCtrl.text.trim().isEmpty
+          ? null
+          : _drawIntervalCtrl.text.trim(),
     );
 
     try {
@@ -1245,8 +1768,9 @@ class _GroupFormSheetState extends State<_GroupFormSheet> {
       final l10n = AppLocalizations.of(context);
       Navigator.of(context).pop(result);
       ToastService.show(
-        title:
-            widget.group == null ? l10n.groupCreatedTitle : l10n.groupUpdatedTitle,
+        title: widget.group == null
+            ? l10n.groupCreatedTitle
+            : l10n.groupUpdatedTitle,
         message: group.name,
         type: ToastType.success,
       );
@@ -1867,6 +2391,7 @@ class _GroupDetailsFrame extends StatefulWidget {
 class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
   late ChitGroup _group;
   List<ChitMember> _members = [];
+  final Map<String, double> _memberCollected = <String, double>{};
   bool _isLoading = true;
   String? _loadError;
   bool _changed = false;
@@ -1875,6 +2400,8 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
       0; // 0 = Member Collections, 1 = Installment Schedule, 2 = Auctions & Settlement
   List<ChitSchedule> _schedules = [];
   Map<int, ChitScheduleStatusSummary> _scheduleStatus = {};
+  final Map<String, int> _memberNextDraw = <String, int>{};
+  final Map<String, double> _memberPayableAmount = <String, double>{};
   bool _loadingSchedules = false;
   String? _scheduleLoadError;
 
@@ -1897,7 +2424,9 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
   /// same split the backend enforces (ChitActionController only reserves
   /// settle/reverse/delete for admins).
   bool get _canRecordWinner =>
-      _role == UserRole.admin || _role == UserRole.owner || _role == UserRole.agent;
+      _role == UserRole.admin ||
+      _role == UserRole.owner ||
+      _role == UserRole.agent;
 
   /// Handing over the prize — and undoing that — moves cash, so only an
   /// admin can do it, matching the 403 the backend would otherwise return.
@@ -1924,15 +2453,16 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
       // status summary is supplementary — if it fails, the schedule still
       // renders, just without the payment status column filled in.
       final schedulesFuture = ChitGroupApiService.fetchSchedules(_group.id);
-      final statusFuture = ChitGroupApiService
-          .fetchScheduleStatusSummary(_group.id)
-          .catchError((_) => <int, ChitScheduleStatusSummary>{});
+      final statusFuture =
+          ChitGroupApiService.fetchScheduleStatusSummary(_group.id)
+              .catchError((_) => <int, ChitScheduleStatusSummary>{});
       final schedules = await schedulesFuture;
       final status = await statusFuture;
       if (!mounted) return;
       setState(() {
         _schedules = schedules;
         _scheduleStatus = status;
+        _refreshMemberPayableAmounts();
         _loadingSchedules = false;
       });
     } catch (e) {
@@ -1957,6 +2487,7 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
     setState(() {
       final idx = _schedules.indexWhere((s) => s.id == updated.id);
       if (idx != -1) _schedules[idx] = updated;
+      _refreshMemberPayableAmounts();
       _changed = true;
     });
     final l10n = AppLocalizations.of(context);
@@ -2113,9 +2644,35 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
     });
     try {
       final members = await ChitGroupApiService.fetchMembers(_group.id);
+      final passbooks = await Future.wait(members.map((member) async {
+        try {
+          return (
+            member.id,
+            await ChitGroupApiService.fetchPassbook(member.id)
+          );
+        } catch (_) {
+          return (member.id, null);
+        }
+      }));
+      final collected = <String, double>{};
+      final nextDraws = <String, int>{};
+      for (final entry in passbooks) {
+        collected[entry.$1] =
+            (entry.$2?.receipts ?? const <ChitPaymentReceipt>[])
+                .fold<double>(0, (sum, receipt) => sum + receipt.amount);
+        final nextDrawNumber = entry.$2?.nextDueDraw?.drawNumber;
+        if (nextDrawNumber != null) nextDraws[entry.$1] = nextDrawNumber;
+      }
       if (!mounted) return;
       setState(() {
         _members = members;
+        _memberCollected
+          ..clear()
+          ..addAll(collected);
+        _memberNextDraw
+          ..clear()
+          ..addAll(nextDraws);
+        _refreshMemberPayableAmounts();
         _isLoading = false;
       });
     } catch (e) {
@@ -2125,6 +2682,22 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
         _isLoading = false;
       });
     }
+  }
+
+  void _refreshMemberPayableAmounts() {
+    _memberPayableAmount
+      ..clear()
+      ..addEntries(
+        _memberNextDraw.entries.map((entry) {
+          final schedule = _schedules.cast<ChitSchedule?>().firstWhere(
+                (item) => item?.installmentNo == entry.value,
+                orElse: () => null,
+              );
+          return schedule == null
+              ? null
+              : MapEntry(entry.key, schedule.payableAmount);
+        }).whereType<MapEntry<String, double>>(),
+      );
   }
 
   Future<void> _openAddMember() async {
@@ -2239,6 +2812,10 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
         _group = result.group;
         final memberIndex = _members.indexWhere((item) => item.id == member.id);
         if (memberIndex != -1) _members[memberIndex] = result.member;
+        _memberCollected[member.id] = result.passbookRows.fold<double>(
+            0,
+            (sum, row) =>
+                sum + (double.tryParse('${row['paid_amount'] ?? 0}') ?? 0));
         _changed = true;
       });
       if (!mounted) return;
@@ -2268,6 +2845,7 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
       // switches tabs, rather than whatever was last fetched. The Auctions &
       // Settlement tab's "collected so far" figure is derived from the same
       // chit_passbook rows, so it needs the same refresh.
+      unawaited(_loadMembers());
       unawaited(_loadSchedules());
       unawaited(_loadAuctions());
     } catch (e) {
@@ -2369,8 +2947,7 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
                     label: l10n.groupNumberShortLabel, value: _group.code)),
             Expanded(
                 child: _DetailStat(
-                    label: l10n.membersLabel,
-                    value: '${_group.totalMembers}')),
+                    label: l10n.membersLabel, value: '${_group.totalMembers}')),
             Expanded(
                 child: _DetailStat(
                     label: l10n.valueLabel,
@@ -2641,7 +3218,9 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
           // 2. CONTRIBUTION COLUMN
           SizedBox(
             width: 120,
-            child: Text(formatIndianCurrency(member.contributionAmount),
+            child: Text(
+                formatIndianCurrency(_memberPayableAmount[member.id] ??
+                    member.contributionAmount),
                 style: const TextStyle(
                     color: AppColors.kTextDark,
                     fontSize: 14,
@@ -2805,8 +3384,8 @@ class _GroupDetailsFrameState extends State<_GroupDetailsFrame> {
         const Text(
           'Record who won each draw and hand the prize over — the money '
           'moves through the group\'s cash book the moment you pay it out.',
-          style: TextStyle(
-              color: AppColors.kTextMuted, fontSize: 13, height: 1.4),
+          style:
+              TextStyle(color: AppColors.kTextMuted, fontSize: 13, height: 1.4),
         ),
         const SizedBox(height: 16),
         if (_loadingAuctions)
@@ -3368,8 +3947,7 @@ class _ScheduleTable extends StatelessWidget {
             // have non-zero flex but incoming width constraints are
             // unbounded", and the whole table silently fails to paint.
             constraints: BoxConstraints.tightFor(
-                width:
-                    constraints.maxWidth > 820 ? constraints.maxWidth : 820),
+                width: constraints.maxWidth > 820 ? constraints.maxWidth : 820),
             child: Container(
               decoration: BoxDecoration(
                 border: Border.all(color: AppColors.kBorder),
@@ -3796,8 +4374,8 @@ class _AddMemberFrameState extends State<_AddMemberFrame> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    l10n.defaultsToAmount(formatIndianCurrency(
-                        widget.group.monthlyContribution)),
+                    l10n.defaultsToAmount(
+                        formatIndianCurrency(widget.group.monthlyContribution)),
                     style: const TextStyle(
                         color: AppColors.kTextMuted, fontSize: 12),
                   ),
@@ -3888,8 +4466,7 @@ InputDecoration _auctionFieldDecoration({String? hint, Widget? suffixIcon}) {
     isDense: true,
     filled: true,
     fillColor: const Color(0xFFF8FAFC),
-    contentPadding:
-        const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
     suffixIcon: suffixIcon,
     border: OutlineInputBorder(
       borderRadius: BorderRadius.circular(12),
@@ -3978,8 +4555,7 @@ class _AuctionSummaryStrip extends StatelessWidget {
       return Wrap(
         spacing: 12,
         runSpacing: 12,
-        children:
-            stats.map((s) => SizedBox(width: width, child: s)).toList(),
+        children: stats.map((s) => SizedBox(width: width, child: s)).toList(),
       );
     });
   }
@@ -4151,8 +4727,8 @@ class _AuctionTable extends StatelessWidget {
             child: Column(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: const BoxDecoration(
                     color: Color(0xFFF6F5F1),
                     borderRadius:
@@ -4223,8 +4799,8 @@ class _AuctionRow extends StatelessWidget {
           Expanded(
             flex: 1,
             child: Text('#${draw.installmentNo}',
-                style: const TextStyle(
-                    fontWeight: FontWeight.bold, fontSize: 13)),
+                style:
+                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
           ),
           Expanded(
             flex: 2,
@@ -4248,15 +4824,17 @@ class _AuctionRow extends StatelessWidget {
                       Flexible(
                         child: Text(auction!.memberName!,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontWeight: FontWeight.w600)),
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w600)),
                       ),
                     ],
                   ),
           ),
           Expanded(
             flex: 2,
-            child: Text(
-                auction == null ? '—' : formatIndianCurrency(auction.bidAmount)),
+            child: Text(auction == null
+                ? '—'
+                : formatIndianCurrency(auction.bidAmount)),
           ),
           Expanded(
             flex: 2,
@@ -4363,96 +4941,323 @@ class _AuctionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final auction = draw.auction;
+    final accent = _auctionStatusForeground(draw.status);
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.only(bottom: 14),
       decoration: BoxDecoration(
+        color: AppColors.kSurface,
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: AppColors.kBorder),
-        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.ink900.withOpacity(0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 3),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('Draw #${draw.installmentNo}',
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
-              _AuctionStatusPill(status: draw.status),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(formatDate(auction?.auctionDate ?? draw.dueDate),
-              style:
-                  const TextStyle(color: AppColors.kTextMuted, fontSize: 12)),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: _AuctionMiniStat(
-                    label: 'Pool',
-                    value: formatIndianCurrency(draw.poolAmount)),
-              ),
-              Expanded(
-                child: _AuctionMiniStat(
-                  label: 'Winner',
-                  value: auction?.memberName ?? 'Not drawn yet',
-                  color: auction?.memberName == null
-                      ? AppColors.kTextMuted
-                      : AppColors.kTextDark,
-                ),
-              ),
-            ],
-          ),
-          if (auction != null) ...[
-            const SizedBox(height: 10),
-            Row(
+          _buildHeader(accent),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: _AuctionMiniStat(
-                      label: 'Discount',
-                      value: formatIndianCurrency(auction.bidAmount)),
-                ),
-                Expanded(
-                  child: _AuctionMiniStat(
-                      label: 'Payout',
-                      value: formatIndianCurrency(auction.payoutAmount),
-                      color: AppColors.kSuccess),
-                ),
-                Expanded(
-                  child: _AuctionMiniStat(
-                      label: 'Dividend',
-                      value: formatIndianCurrency(auction.dividendTotal),
-                      color: const Color(0xFF4C1D95)),
-                ),
+                _buildWinnerBlock(auction),
+                const SizedBox(height: 12),
+                _buildFigures(auction),
+                const SizedBox(height: 14),
+                ..._buildActions(),
               ],
-            ),
-          ],
-          const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 8,
-              children: _auctionActions(
-                draw: draw,
-                canRecordWinner: canRecordWinner,
-                canSettlePayout: canSettlePayout,
-                onRecordWinner: onRecordWinner,
-                onPayOut: onPayOut,
-                onReverse: onReverse,
-                onDelete: onDelete,
-              ),
             ),
           ),
         ],
       ),
     );
   }
+
+  /// Status-tinted band: which draw, when, and where it stands — the
+  /// context you need before any money on the card means anything.
+  Widget _buildHeader(Color accent) {
+    final auction = draw.auction;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+      decoration: BoxDecoration(
+        color: _auctionStatusBackground(draw.status).withOpacity(0.55),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+        border: const Border(bottom: BorderSide(color: AppColors.kBorder)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Draw #${draw.installmentNo}',
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                      color: accent == AppColors.kTextMuted
+                          ? AppColors.kTextDark
+                          : accent),
+                ),
+                const SizedBox(height: 3),
+                Row(
+                  children: [
+                    const Icon(Icons.event_outlined,
+                        size: 13, color: AppColors.kTextMuted),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text(
+                        formatDate(auction?.auctionDate ?? draw.dueDate),
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.kTextMuted),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          _AuctionStatusPill(status: draw.status),
+        ],
+      ),
+    );
+  }
+
+  /// The one thing everyone looks for first — who took this draw.
+  Widget _buildWinnerBlock(ChitAuctionRecord? auction) {
+    final name = auction?.memberName;
+    final hasWinner = name != null && name.isNotEmpty;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+      decoration: BoxDecoration(
+        color: hasWinner ? const Color(0xFFFFFBEB) : AppColors.ink50,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+            color: hasWinner ? const Color(0xFFF3DA88) : AppColors.kBorder),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: hasWinner ? const Color(0xFFFAEDC4) : AppColors.ink100,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              hasWinner ? Icons.emoji_events : Icons.hourglass_empty,
+              size: 18,
+              color: hasWinner ? const Color(0xFFCA8A04) : AppColors.kTextMuted,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(hasWinner ? 'WINNER' : 'NO WINNER YET',
+                    style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.8,
+                        color: AppColors.kTextMuted)),
+                const SizedBox(height: 2),
+                Text(
+                  hasWinner ? name : 'Draw not held',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color:
+                        hasWinner ? AppColors.kTextDark : AppColors.kTextMuted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Money block: the two figures that matter side by side, the two
+  /// supporting ones as chips underneath so nothing gets squeezed at 320px.
+  Widget _buildFigures(ChitAuctionRecord? auction) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.ink50,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.kBorder),
+      ),
+      child: Column(
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: _AuctionFigure(
+                  label: 'Chit Pool',
+                  value: formatIndianCurrency(draw.poolAmount),
+                ),
+              ),
+              Container(
+                width: 1,
+                height: 38,
+                margin: const EdgeInsets.symmetric(horizontal: 12),
+                color: AppColors.kBorder,
+              ),
+              Expanded(
+                child: _AuctionFigure(
+                  label: 'Winner Gets',
+                  value: auction == null
+                      ? '—'
+                      : formatIndianCurrency(auction.payoutAmount),
+                  color: auction == null
+                      ? AppColors.kTextMuted
+                      : AppColors.kSuccess,
+                ),
+              ),
+            ],
+          ),
+          if (auction != null) ...[
+            const SizedBox(height: 12),
+            const Divider(height: 1, color: AppColors.kBorder),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _AuctionChip(
+                  icon: Icons.trending_down,
+                  label: 'Discount',
+                  value: formatIndianCurrency(auction.bidAmount),
+                  color: AppColors.kTextDark,
+                ),
+                _AuctionChip(
+                  icon: Icons.groups_outlined,
+                  label: 'Dividend',
+                  value: formatIndianCurrency(auction.dividendTotal),
+                  color: const Color(0xFF4C1D95),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Full-width, thumb-sized actions instead of the desktop table's tiny
+  /// text buttons — same permission gates as [_auctionActions].
+  List<Widget> _buildActions() {
+    switch (draw.status) {
+      case ChitAuctionStatus.open:
+        if (!canRecordWinner) {
+          return const [
+            _AuctionNote(
+              icon: Icons.schedule,
+              text: 'Waiting for this draw to be held.',
+              color: AppColors.kTextMuted,
+            ),
+          ];
+        }
+        return [
+          _AuctionPrimaryButton(
+            icon: Icons.auto_fix_high,
+            label: 'Record Winner',
+            color: const Color(0xFF7C3AED),
+            onPressed: () => onRecordWinner(draw),
+          ),
+        ];
+
+      case ChitAuctionStatus.won:
+        final rowButtons = <Widget>[
+          if (canRecordWinner)
+            _AuctionSecondaryButton(
+              icon: Icons.edit_outlined,
+              label: 'Edit',
+              color: const Color(0xFF7C3AED),
+              onPressed: () => onRecordWinner(draw),
+            ),
+          if (canRecordWinner)
+            _AuctionSecondaryButton(
+              icon: Icons.delete_outline,
+              label: 'Remove',
+              color: AppColors.kDanger,
+              onPressed: () => onDelete(draw),
+            ),
+        ];
+        return [
+          if (canSettlePayout)
+            _AuctionPrimaryButton(
+              icon: Icons.payments_outlined,
+              label: draw.auction == null
+                  ? 'Pay Out'
+                  : 'Pay Out ${formatIndianCurrency(draw.auction!.payoutAmount)}',
+              color: AppColors.kSuccess,
+              onPressed: () => onPayOut(draw),
+            ),
+          if (canSettlePayout && rowButtons.isNotEmpty)
+            const SizedBox(height: 8),
+          if (rowButtons.isNotEmpty)
+            Row(
+              children: [
+                for (var i = 0; i < rowButtons.length; i++) ...[
+                  if (i > 0) const SizedBox(width: 8),
+                  Expanded(child: rowButtons[i]),
+                ],
+              ],
+            ),
+          if (!canSettlePayout && rowButtons.isEmpty)
+            const _AuctionNote(
+              icon: Icons.hourglass_bottom,
+              text: 'Winner recorded — payout pending.',
+              color: AppColors.kWarning,
+            ),
+        ];
+
+      case ChitAuctionStatus.settled:
+        return [
+          const _AuctionNote(
+            icon: Icons.check_circle,
+            text: 'Prize paid out to the winner.',
+            color: AppColors.kSuccess,
+          ),
+          if (canSettlePayout) ...[
+            const SizedBox(height: 8),
+            _AuctionSecondaryButton(
+              icon: Icons.undo,
+              label: 'Reverse Payout',
+              color: AppColors.kDanger,
+              onPressed: () => onReverse(draw),
+              fullWidth: true,
+            ),
+          ],
+        ];
+    }
+  }
 }
 
-class _AuctionMiniStat extends StatelessWidget {
-  const _AuctionMiniStat({required this.label, required this.value, this.color});
+/// One headline figure inside the money block.
+class _AuctionFigure extends StatelessWidget {
+  const _AuctionFigure({required this.label, required this.value, this.color});
   final String label;
   final String value;
   final Color? color;
@@ -4461,16 +5266,160 @@ class _AuctionMiniStat extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
         Text(label,
-            style: const TextStyle(color: AppColors.kTextMuted, fontSize: 11)),
-        const SizedBox(height: 2),
-        Text(value,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-                color: color ?? AppColors.kTextDark,
+            style: const TextStyle(
+                fontSize: 11,
                 fontWeight: FontWeight.w600,
-                fontSize: 13)),
+                color: AppColors.kTextMuted)),
+        const SizedBox(height: 4),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(value,
+              maxLines: 1,
+              style: TextStyle(
+                  fontSize: 19,
+                  fontWeight: FontWeight.w800,
+                  color: color ?? AppColors.kTextDark)),
+        ),
+      ],
+    );
+  }
+}
+
+/// Supporting figure — small enough to sit two-up on the narrowest phone.
+class _AuctionChip extends StatelessWidget {
+  const _AuctionChip({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: AppColors.kSurface,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.kBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color.withOpacity(0.8)),
+          const SizedBox(width: 6),
+          Text('$label ',
+              style:
+                  const TextStyle(fontSize: 12, color: AppColors.kTextMuted)),
+          Text(value,
+              style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w700, color: color)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Filled, full-width call to action — the one thing to do on this draw.
+class _AuctionPrimaryButton extends StatelessWidget {
+  const _AuctionPrimaryButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onPressed,
+  });
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      height: 46,
+      child: ElevatedButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 18),
+        label: Text(label, overflow: TextOverflow.ellipsis),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: color,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+        ),
+      ),
+    );
+  }
+}
+
+/// Outlined companion action, sized for a thumb rather than a mouse.
+class _AuctionSecondaryButton extends StatelessWidget {
+  const _AuctionSecondaryButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onPressed,
+    this.fullWidth = false,
+  });
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onPressed;
+  final bool fullWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: fullWidth ? double.infinity : null,
+      height: 44,
+      child: OutlinedButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon, size: 17),
+        label: Text(label, overflow: TextOverflow.ellipsis),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: color,
+          backgroundColor: color.withOpacity(0.04),
+          side: BorderSide(color: color.withOpacity(0.35)),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        ),
+      ),
+    );
+  }
+}
+
+/// Status line shown where there is nothing for this user to press.
+class _AuctionNote extends StatelessWidget {
+  const _AuctionNote(
+      {required this.icon, required this.text, required this.color});
+  final IconData icon;
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(text,
+              style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w600, color: color)),
+        ),
       ],
     );
   }
@@ -4554,8 +5503,8 @@ class _RecordAuctionSheetState extends State<_RecordAuctionSheet> {
       return;
     }
     if (_bid > _pool) {
-      setState(() =>
-          _error = 'The discount cannot be more than the pool of ${formatIndianCurrency(_pool)}');
+      setState(() => _error =
+          'The discount cannot be more than the pool of ${formatIndianCurrency(_pool)}');
       return;
     }
     setState(() {
@@ -4641,11 +5590,13 @@ class _RecordAuctionSheetState extends State<_RecordAuctionSheet> {
                         const TextSpan(text: 'Pool for this draw: '),
                         TextSpan(
                             text: formatIndianCurrency(_pool),
-                            style: const TextStyle(fontWeight: FontWeight.w800)),
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
                         const TextSpan(text: ' · collected so far '),
                         TextSpan(
                             text: formatIndianCurrency(widget.draw.collected),
-                            style: const TextStyle(fontWeight: FontWeight.w800)),
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
                       ],
                     ),
                   ),
@@ -4655,7 +5606,8 @@ class _RecordAuctionSheetState extends State<_RecordAuctionSheet> {
                   text: 'WINNER',
                   style: _auctionLabelStyle,
                   children: [
-                    TextSpan(text: ' *', style: TextStyle(color: AppColors.kDanger)),
+                    TextSpan(
+                        text: ' *', style: TextStyle(color: AppColors.kDanger)),
                   ],
                 )),
                 const SizedBox(height: 8),
@@ -4669,8 +5621,8 @@ class _RecordAuctionSheetState extends State<_RecordAuctionSheet> {
                   items: widget.members
                       .map((m) => DropdownMenuItem(
                             value: m.id,
-                            child:
-                                Text(m.memberName, overflow: TextOverflow.ellipsis),
+                            child: Text(m.memberName,
+                                overflow: TextOverflow.ellipsis),
                           ))
                       .toList(),
                   onChanged: (v) => setState(() => _memberId = v),
@@ -4683,7 +5635,8 @@ class _RecordAuctionSheetState extends State<_RecordAuctionSheet> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text('DISCOUNT / BID (₹)', style: _auctionLabelStyle),
+                          const Text('DISCOUNT / BID (₹)',
+                              style: _auctionLabelStyle),
                           const SizedBox(height: 8),
                           TextField(
                             controller: _bidCtrl,
@@ -4705,7 +5658,8 @@ class _RecordAuctionSheetState extends State<_RecordAuctionSheet> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text('COMMISSION (₹)', style: _auctionLabelStyle),
+                          const Text('COMMISSION (₹)',
+                              style: _auctionLabelStyle),
                           const SizedBox(height: 8),
                           TextField(
                             controller: _commissionCtrl,
@@ -5026,7 +5980,9 @@ class _PayOutAuctionSheetState extends State<_PayOutAuctionSheet> {
                       "collected towards this draw. The remainder comes out of the "
                       "group's other funds.",
                       style: const TextStyle(
-                          color: Color(0xFFB45309), fontSize: 12.5, height: 1.4),
+                          color: Color(0xFFB45309),
+                          fontSize: 12.5,
+                          height: 1.4),
                     ),
                   ),
                 ],
@@ -5169,6 +6125,73 @@ class _PayOutAuctionSheetState extends State<_PayOutAuctionSheet> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _StatCard extends StatelessWidget {
+  const _StatCard({
+    required this.icon,
+    required this.iconBg,
+    required this.iconColor,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final Color iconBg;
+  final Color iconColor;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.kSurface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: iconBg,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, size: 16, color: iconColor),
+              ),
+            ],
+          ),
+          const Spacer(),
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: AppColors.kTextMuted,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: AppColors.kTextDark,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
       ),
     );
   }

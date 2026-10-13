@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:http/http.dart' as http;
 import '../config/api_config.dart';
 import 'method_override_http.dart';
+import 'session_service.dart';
 
 /// Low-level REST client matching the PHP backend's generic resource
 /// endpoint (`Model::forTable()` / `ResourceController` / `rest.php?table=`).
@@ -113,6 +115,7 @@ class ApiClient {
 
   dynamic _decode(http.Response res) {
     if (res.statusCode >= 300) {
+      unawaited(SessionService.instance.handleUnauthorized(res));
       throw ApiException(res.statusCode, _errorMessage(res));
     }
     if (res.body.isEmpty) return null;

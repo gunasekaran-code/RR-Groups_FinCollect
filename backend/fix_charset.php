@@ -9,6 +9,48 @@
  * Usage: Visit https://rrgroupscbe.com/backend/fix_charset.php
  * Safe to run multiple times — idempotent.
  */
+// ── Not a public URL ─────────────────────────────────────────────────────
+// This shipped with no authentication at all, on a live site, and it can
+// destroy the business's records. bootstrap.php is deliberately not used
+// here — it runs schema migrations at include time — so the same rule is
+// applied with just config and the JWT class, neither of which does anything
+// on its own.
+(function (): void {
+    if (php_sapi_name() === 'cli') return;   // shell access already outranks this
+
+    require_once __DIR__ . '/core/Jwt.php';
+    if (!function_exists('config')) {
+        $__cfg = require __DIR__ . '/config.php';
+        function config(string $k, $d = null) {
+            static $c = null;
+            if ($c === null) $c = require __DIR__ . '/config.php';
+            return $c[$k] ?? $d;
+        }
+    }
+
+    $hdr = $_SERVER['HTTP_AUTHORIZATION']
+        ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
+        ?? $_SERVER['HTTP_X_AUTHORIZATION']
+        ?? '';
+    if (!$hdr && function_exists('getallheaders')) {
+        $h = getallheaders();
+        $hdr = $h['Authorization'] ?? $h['authorization'] ?? '';
+    }
+    if (!$hdr && !empty($_GET['token'])) $hdr = 'Bearer ' . $_GET['token'];
+    $token = preg_match('/Bearer\s+(.+)/i', $hdr, $m) ? trim($m[1]) : trim((string)$hdr);
+
+    $claims = $token !== '' ? Jwt::decode($token) : null;
+    if (strtolower(trim((string)($claims['role'] ?? ''))) !== 'admin') {
+        http_response_code(403);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo "Forbidden.\n\n";
+        echo "This is a maintenance script. Run it from the command line, or\n";
+        echo "append ?token=<your admin token> to the URL.\n\n";
+        echo "Better still: delete it. It was written for one deploy, and a\n";
+        echo "file that can rewrite or erase the books should not outlive the job.\n";
+        exit;
+    }
+})();
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
 ini_set('max_execution_time', 120);
@@ -73,7 +115,7 @@ try {
         "SELECT DISTINCT TABLE_NAME FROM information_schema.COLUMNS
          WHERE TABLE_SCHEMA = DATABASE()
            AND CHARACTER_SET_NAME IS NOT NULL
-           AND CHARACTER_SET_NAME <> 'utf8mb4'"
+           AND (CHARACTER_SET_NAME <> 'utf8mb4' OR COLLATION_NAME <> 'utf8mb4_unicode_ci')"
     )->fetchAll(PDO::FETCH_COLUMN);
     $report['tables_needing_conversion'] = $badTables;
 } catch (Throwable $e) {
@@ -106,7 +148,7 @@ if (!empty($badTables)) {
                      WHERE TABLE_SCHEMA = DATABASE()
                        AND TABLE_NAME = '{$table}'
                        AND CHARACTER_SET_NAME IS NOT NULL
-                       AND CHARACTER_SET_NAME <> 'utf8mb4'"
+                       AND (CHARACTER_SET_NAME <> 'utf8mb4' OR COLLATION_NAME <> 'utf8mb4_unicode_ci')"
                 )->fetchAll();
                 
                 foreach ($cols as $col) {
@@ -142,11 +184,11 @@ $report['failed_tables'] = $failedTables;
 // 7. Verify: check remaining non-utf8mb4 columns
 try {
     $remaining = $pdo->query(
-        "SELECT CONCAT(TABLE_NAME, '.', COLUMN_NAME, ' = ', CHARACTER_SET_NAME)
+        "SELECT CONCAT(TABLE_NAME, '.', COLUMN_NAME, ' = ', CHARACTER_SET_NAME, '/', COLLATION_NAME)
          FROM information_schema.COLUMNS
          WHERE TABLE_SCHEMA = DATABASE()
            AND CHARACTER_SET_NAME IS NOT NULL
-           AND CHARACTER_SET_NAME <> 'utf8mb4'"
+           AND (CHARACTER_SET_NAME <> 'utf8mb4' OR COLLATION_NAME <> 'utf8mb4_unicode_ci')"
     )->fetchAll(PDO::FETCH_COLUMN);
     $report['remaining_non_utf8mb4'] = $remaining;
     $report['tamil_safe'] = empty($remaining);

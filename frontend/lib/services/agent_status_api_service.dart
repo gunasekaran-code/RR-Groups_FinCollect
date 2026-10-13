@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
+import 'session_http_client.dart';
 
 import 'auth_api_service.dart' show ApiException;
 import 'auth_api_service.dart' show AuthApiService;
@@ -43,6 +44,8 @@ class AgentStatusApiService {
     final http.Response res;
     try {
       res = await http.get(uri, headers: await _headers());
+    } on SessionExpiredException {
+      rethrow;
     } catch (_) {
       throw ApiException(
           'Could not reach the server. Check your connection.', 0);
@@ -71,6 +74,8 @@ class AgentStatusApiService {
         headers: await _headers(),
         body: jsonEncode({'loan_id': loanId, 'customer_id': customerId}),
       );
+    } on SessionExpiredException {
+      rethrow;
     } catch (_) {
       throw ApiException(
           'Could not reach the server. Check your connection.', 0);

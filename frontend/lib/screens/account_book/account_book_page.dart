@@ -9,6 +9,7 @@ import '../../theme/confirm_dialog.dart';
 import '../../models/account_ledger_model.dart';
 import '../../services/account_ledger_service.dart';
 import '../../l10n/generated/app_localizations.dart';
+import 'calculator_entry_screen.dart';
 
 String localizedTabLabel(String key, AppLocalizations l10n) {
   switch (key) {
@@ -103,6 +104,7 @@ class _AccountBookScreenState extends State<AccountBookScreen> {
   ];
 
   List<AccountLedgerEntry> _transactions = [];
+  final Set<String> _selectedEntryIds = <String>{};
   bool _isLoading = true;
   String? _errorMessage;
   AccountLedgerSummary? _summary;
@@ -143,6 +145,8 @@ class _AccountBookScreenState extends State<AccountBookScreen> {
       if (!mounted) return;
       setState(() {
         _transactions = entries;
+        _selectedEntryIds.removeWhere(
+            (key) => !entries.any((entry) => entry.selectionKey == key));
         _isLoading = false;
       });
     } catch (e) {
@@ -182,7 +186,11 @@ class _AccountBookScreenState extends State<AccountBookScreen> {
     return _transactions.where((tx) {
       final query = _searchQuery.toLowerCase();
       final matchesSearch = tx.title.toLowerCase().contains(query) ||
-          tx.category.toLowerCase().contains(query);
+          tx.category.toLowerCase().contains(query) ||
+          tx.notes?.toLowerCase().contains(query) == true ||
+          tx.module.toLowerCase().contains(query) ||
+          tx.moduleLabel.toLowerCase().contains(query) ||
+          tx.typeLabel.toLowerCase().contains(query);
 
       if (!matchesSearch) return false;
 
@@ -201,6 +209,28 @@ class _AccountBookScreenState extends State<AccountBookScreen> {
     }).toList();
   }
 
+  List<AccountLedgerEntry> get _selectableFilteredTransactions =>
+      _filteredTransactions.where((tx) => tx.id.isNotEmpty).toList();
+
+  bool get _allVisibleSelected {
+    final selectable = _selectableFilteredTransactions;
+    return selectable.isNotEmpty &&
+        selectable
+            .every((entry) => _selectedEntryIds.contains(entry.selectionKey));
+  }
+
+  void _toggleSelectAll() {
+    setState(() {
+      if (_allVisibleSelected) {
+        _selectedEntryIds.removeAll(
+            _selectableFilteredTransactions.map((entry) => entry.selectionKey));
+      } else {
+        _selectedEntryIds.addAll(
+            _selectableFilteredTransactions.map((entry) => entry.selectionKey));
+      }
+    });
+  }
+
   // Dynamic Button Label based on Active Tab
   String _addButtonLabel(AppLocalizations l10n) {
     if (_selectedTab == 'Cash In Hand') {
@@ -209,6 +239,31 @@ class _AccountBookScreenState extends State<AccountBookScreen> {
       return l10n.accountAddMoneyLentButton;
     }
     return l10n.accountAddEntryButton;
+  }
+
+  void _openCalculatorEntry() {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (context) => CalculatorQuickEntryScreen(
+        service: _service,
+        currentCashInHand: _summary?.cashInHand ?? 0,
+        onSaved: (savedEntry) {
+          setState(() {
+            final idx = _transactions.indexWhere((t) => t.id == savedEntry.id);
+            if (idx != -1) {
+              _transactions[idx] = savedEntry;
+            } else {
+              _transactions.insert(0, savedEntry);
+            }
+          });
+          _refreshSummary();
+          ToastService.show(
+            title: 'Entry saved',
+            message: 'Cash entry was added to the Account Book.',
+            type: ToastType.success,
+          );
+        },
+      ),
+    ));
   }
 
   // ==========================================
@@ -278,7 +333,9 @@ class _AccountBookScreenState extends State<AccountBookScreen> {
     });
 
     try {
-      await _service.deleteEntry(entry.id);
+      await _service.deleteTransactions([
+        (table: entry.sourceTable, id: entry.id),
+      ]);
       await _refreshSummary();
       if (!mounted) return;
       ToastService.show(
@@ -290,7 +347,52 @@ class _AccountBookScreenState extends State<AccountBookScreen> {
       if (!mounted) return;
       setState(() => _transactions = previous);
       ToastService.show(
-        title: l10n.accountDeleteFailedTitle,
+        title: AppLocalizations.of(context).accountDeleteFailedTitle,
+        message: e.toString(),
+        type: ToastType.error,
+      );
+    }
+  }
+
+  Future<void> _handleDeleteSelected() async {
+    final selected = _transactions
+        .where((entry) => _selectedEntryIds.contains(entry.selectionKey))
+        .toList();
+    if (selected.isEmpty) return;
+
+    final confirmed = await AppConfirmDialog.show(
+      context: context,
+      title: 'Delete selected entries?',
+      message:
+          '${selected.length} selected account-book entries will be moved to the Recycle Bin.',
+      confirmLabel: 'Delete all',
+      confirmButtonColor: AppColors.kDanger,
+    );
+    if (confirmed != true) return;
+
+    final previous = List<AccountLedgerEntry>.from(_transactions);
+    setState(() {
+      _transactions.removeWhere(
+          (entry) => _selectedEntryIds.contains(entry.selectionKey));
+      _selectedEntryIds.clear();
+    });
+
+    try {
+      await _service.deleteTransactions(selected
+          .map((entry) => (table: entry.sourceTable, id: entry.id))
+          .toList());
+      await _refreshSummary();
+      if (!mounted) return;
+      ToastService.show(
+        title: 'Entries deleted',
+        message: 'Selected entries were moved to the Recycle Bin.',
+        type: ToastType.success,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _transactions = previous);
+      ToastService.show(
+        title: AppLocalizations.of(context).accountDeleteFailedTitle,
         message: e.toString(),
         type: ToastType.error,
       );
@@ -400,288 +502,281 @@ class _AccountBookScreenState extends State<AccountBookScreen> {
 // only the "refresh" action here also re-syncs the ledger list below.
 // ==========================================
 
-Widget _buildNetBalanceSummary(AppLocalizations l10n) {
-  final summary = _summary;
+  Widget _buildNetBalanceSummary(AppLocalizations l10n) {
+    final summary = _summary;
 
-  final theme = Theme.of(context);
-  final scheme = theme.colorScheme;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
 
-  return ClipRRect(
-    borderRadius: BorderRadius.circular(24),
-    child: Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            scheme.primary.withValues(alpha: 0.92),
-            AppColors.kGoldDark.withValues(alpha: 0.92),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(
-          color: AppColors.kGold.withOpacity(0.35),
-          width: 1.2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.18),
-            blurRadius: 14,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ==========================================
-          // HEADER
-          // ==========================================
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  const Icon(
-                    Icons.savings_outlined,
-                    color: AppColors.kGoldLight,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    l10n.accountNetBalanceSummaryTitle,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-
-              IconButton(
-                icon: const Icon(
-                  Icons.refresh,
-                  color: AppColors.kGoldLight,
-                  size: 21,
-                ),
-                tooltip: 'Refresh',
-                onPressed: _loadEntries,
-              ),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              scheme.primary.withValues(alpha: 0.92),
+              AppColors.kGoldDark.withValues(alpha: 0.92),
             ],
           ),
-
-          const SizedBox(height: 4),
-
-          const Text(
-            'Overview of your current financial position',
-            style: TextStyle(
-              color: AppColors.kTextOnDarkMuted,
-              fontSize: 12,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color: AppColors.kGold.withOpacity(0.35),
+            width: 1.2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.18),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
             ),
-          ),
-
-          const SizedBox(height: 16),
-
-          // ==========================================
-          // CASH IN HAND
-          // ==========================================
-          _buildDarkSummaryBox(
-            l10n.accountCashInHandLabel,
-            _summaryAmount(summary?.cashInHand),
-          ),
-
-          const SizedBox(height: 12),
-
-          // ==========================================
-          // OUTSTANDING MONEY LENT
-          // ==========================================
-          _buildDarkSummaryBox(
-            l10n.accountOutstandingLabel,
-            _summaryAmount(summary?.outstandingMoneyLent),
-          ),
-
-          const SizedBox(height: 16),
-
-          // ==========================================
-          // NET BALANCE
-          // ==========================================
-          Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  AppColors.kGold.withOpacity(0.25),
-                  AppColors.kGoldDark.withOpacity(0.15),
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: AppColors.kGold.withOpacity(0.5),
-                width: 1,
-              ),
-            ),
-            child: Row(
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ==========================================
+            // HEADER
+            // ==========================================
+            Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                Row(
                   children: [
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.emoji_events_outlined,
-                          color: AppColors.kGoldLight,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          l10n.accountNetBalanceLabel,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
+                    const Icon(
+                      Icons.savings_outlined,
+                      color: AppColors.kGoldLight,
+                      size: 20,
                     ),
-
-                    const SizedBox(height: 6),
-
+                    const SizedBox(width: 8),
                     Text(
-                      _summaryAmount(summary?.netBalance),
+                      l10n.accountNetBalanceSummaryTitle,
                       style: const TextStyle(
-                        color: AppColors.gold50,
-                        fontSize: 26,
+                        color: Colors.white,
+                        fontSize: 16,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                   ],
                 ),
-
-                // ==========================================
-                // STATUS BADGE
-                // ==========================================
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 4,
+                IconButton(
+                  icon: const Icon(
+                    Icons.refresh,
+                    color: AppColors.kGoldLight,
+                    size: 21,
                   ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.25),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: AppColors.kGold.withOpacity(0.35),
-                    ),
-                  ),
-                  child: Text(
-                    _isSummaryLoading
-                        ? l10n.accountUpdatingBadge
-                        : l10n.accountLiveBadge,
-                    style: const TextStyle(
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.kGoldLight,
-                    ),
-                  ),
+                  tooltip: 'Refresh',
+                  onPressed: _loadEntries,
                 ),
               ],
             ),
-          ),
 
-          // ==========================================
-          // ERROR MESSAGE
-          // ==========================================
-          if (_summaryError != null) ...[
+            const SizedBox(height: 4),
+
+            const Text(
+              'Overview of your current financial position',
+              style: TextStyle(
+                color: AppColors.kTextOnDarkMuted,
+                fontSize: 12,
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // ==========================================
+            // CASH IN HAND
+            // ==========================================
+            _buildDarkSummaryBox(
+              l10n.accountCashInHandLabel,
+              _summaryAmount(summary?.cashInHand),
+            ),
+
             const SizedBox(height: 12),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(
-                  Icons.info_outline,
-                  color: AppColors.kGoldLight,
-                  size: 16,
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    l10n.accountSummaryRefreshError(_summaryError!),
-                    style: const TextStyle(
-                      color: AppColors.kTextOnDarkMuted,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              ],
+
+            // ==========================================
+            // OUTSTANDING MONEY LENT
+            // ==========================================
+            _buildDarkSummaryBox(
+              l10n.accountOutstandingLabel,
+              _summaryAmount(summary?.outstandingMoneyLent),
             ),
-          ],
-        ],
-      ),
-    ),
-  );
-}
-  
-  
-  
-Widget _buildDarkSummaryBox(String label, String value) {
-  return Container(
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: Colors.white.withValues(alpha: 0.07),
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(
-        color: AppColors.kGold.withOpacity(0.28),
-        width: 1,
-      ),
-    ),
-    child: Row(
-      children: [
-        Container(
-          width: 38,
-          height: 38,
-          decoration: BoxDecoration(
-            color: AppColors.kGold.withOpacity(0.15),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: const Icon(
-            Icons.account_balance_wallet_outlined,
-            color: AppColors.kGoldLight,
-            size: 20,
-          ),
-        ),
 
-        const SizedBox(width: 12),
+            const SizedBox(height: 16),
 
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(
-                  color: AppColors.kTextOnDarkMuted,
-                  fontSize: 11,
+            // ==========================================
+            // NET BALANCE
+            // ==========================================
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    AppColors.kGold.withOpacity(0.25),
+                    AppColors.kGoldDark.withOpacity(0.15),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: AppColors.kGold.withOpacity(0.5),
+                  width: 1,
                 ),
               ),
-              const SizedBox(height: 4),
-              Text(
-                value,
-                style: const TextStyle(
-                  color: AppColors.gold50,
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
-                ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.emoji_events_outlined,
+                            color: AppColors.kGoldLight,
+                            size: 18,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            l10n.accountNetBalanceLabel,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _summaryAmount(summary?.netBalance),
+                        style: const TextStyle(
+                          color: AppColors.gold50,
+                          fontSize: 26,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  // ==========================================
+                  // STATUS BADGE
+                  // ==========================================
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.25),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: AppColors.kGold.withOpacity(0.35),
+                      ),
+                    ),
+                    child: Text(
+                      _isSummaryLoading
+                          ? l10n.accountUpdatingBadge
+                          : l10n.accountLiveBadge,
+                      style: const TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.kGoldLight,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // ==========================================
+            // ERROR MESSAGE
+            // ==========================================
+            if (_summaryError != null) ...[
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(
+                    Icons.info_outline,
+                    color: AppColors.kGoldLight,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      l10n.accountSummaryRefreshError(_summaryError!),
+                      style: const TextStyle(
+                        color: AppColors.kTextOnDarkMuted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
-          ),
+          ],
         ),
-      ],
-    ),
-  );
-}
+      ),
+    );
+  }
+
+  Widget _buildDarkSummaryBox(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: AppColors.kGold.withOpacity(0.28),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: AppColors.kGold.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(
+              Icons.account_balance_wallet_outlined,
+              color: AppColors.kGoldLight,
+              size: 20,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: AppColors.kTextOnDarkMuted,
+                    fontSize: 11,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    color: AppColors.gold50,
+                    fontSize: 17,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   // ==========================================
   // CASH IN HAND CARD
@@ -1007,7 +1102,13 @@ Widget _buildDarkSummaryBox(String label, String value) {
         children: [
           searchField,
           const SizedBox(height: 10),
-          addButton,
+          Row(children: [
+            Expanded(child: addButton),
+            if (_selectedEntryIds.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              _buildBulkDeleteButton(),
+            ],
+          ]),
         ],
       );
     }
@@ -1017,7 +1118,20 @@ Widget _buildDarkSummaryBox(String label, String value) {
         Expanded(child: searchField),
         const SizedBox(width: 12),
         addButton,
+        if (_selectedEntryIds.isNotEmpty) ...[
+          const SizedBox(width: 8),
+          _buildBulkDeleteButton(),
+        ],
       ],
+    );
+  }
+
+  Widget _buildBulkDeleteButton() {
+    return IconButton.filled(
+      onPressed: _handleDeleteSelected,
+      tooltip: 'Delete selected entries',
+      style: IconButton.styleFrom(backgroundColor: AppColors.kDanger),
+      icon: const Icon(Icons.delete_sweep_outlined, color: Colors.white),
     );
   }
 
@@ -1117,7 +1231,8 @@ Widget _buildDarkSummaryBox(String label, String value) {
               const SizedBox(height: 12),
               Text(
                 l10n.accountLoadFailedTitle,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                style:
+                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
               ),
               const SizedBox(height: 6),
               Text(
@@ -1193,11 +1308,16 @@ Widget _buildDarkSummaryBox(String label, String value) {
   Widget _buildTransactionsTable(
       bool isNarrow, List<AccountLedgerEntry> items, AppLocalizations l10n) {
     final table = DataTable(
+      showCheckboxColumn: true,
+      onSelectAll: (_) => _toggleSelectAll(),
       columnSpacing: isNarrow ? 20 : 32,
       horizontalMargin: 24,
       headingRowColor: WidgetStateProperty.all(const Color(0xFFF8FAFC)),
       dataRowMinHeight: 60,
-      dataRowMaxHeight: 68,
+      // Rows size to whatever the fetched row actually needs. A fixed cap
+      // clipped the entries whose title wraps to two lines AND carry two
+      // lines of reference notes — about 72px of content in a 68px row.
+      dataRowMaxHeight: double.infinity,
       headingTextStyle: const TextStyle(
         color: Colors.black54,
         fontWeight: FontWeight.bold,
@@ -1215,11 +1335,25 @@ Widget _buildDarkSummaryBox(String label, String value) {
       ],
       rows: items.map((tx) {
         return DataRow(
+          selected: _selectedEntryIds.contains(tx.selectionKey),
+          onSelectChanged: tx.id.isNotEmpty
+              ? (selected) => setState(() {
+                    if (selected == true) {
+                      _selectedEntryIds.add(tx.selectionKey);
+                    } else {
+                      _selectedEntryIds.remove(tx.selectionKey);
+                    }
+                  })
+              : null,
           cells: [
             DataCell(Text(tx.displayDate,
                 style: const TextStyle(color: Colors.black54, fontSize: 13))),
-            DataCell(SizedBox(
+            DataCell(Container(
               width: 240,
+              // DataTable pads cells horizontally only, so a row sized to its
+              // content would otherwise run edge to edge. This keeps the gap
+              // above and below even, whether the entry needs one line or four.
+              padding: const EdgeInsets.symmetric(vertical: 9),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1311,9 +1445,6 @@ Widget _buildDarkSummaryBox(String label, String value) {
               ),
             )),
             DataCell(
-              // Rows streamed live from Loans/Funds are read-only receipts —
-              // only custom account_ledger rows (custom cash/lent entries,
-              // and chit contributions logged this way) can be edited/deleted.
               tx.isCustom
                   ? Row(
                       mainAxisSize: MainAxisSize.min,
@@ -1331,31 +1462,40 @@ Widget _buildDarkSummaryBox(String label, String value) {
                         ),
                       ],
                     )
-                  : Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF0FDF4),
-                        borderRadius: BorderRadius.circular(20),
-                        border:
-                            Border.all(color: const Color(0xFF16A34A)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.check_circle_outline,
-                              size: 13, color: Color(0xFF16A34A)),
-                          const SizedBox(width: 4),
-                          Text(
-                            l10n.accountLiveSyncedBadge,
-                            style: const TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: Color(0xFF16A34A),
-                            ),
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF0FDF4),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFF16A34A)),
                           ),
-                        ],
-                      ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.check_circle_outline,
+                                  size: 13, color: Color(0xFF16A34A)),
+                              const SizedBox(width: 4),
+                              Text(
+                                l10n.accountLiveSyncedBadge,
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF16A34A),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline, size: 18),
+                          color: const Color(0xFFEF4444),
+                          onPressed: () => _handleDelete(tx),
+                        ),
+                      ],
                     ),
             ),
           ],
@@ -1391,8 +1531,7 @@ Widget _buildDarkSummaryBox(String label, String value) {
             ),
           ),
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
               border: Border(top: BorderSide(color: Colors.grey.shade200)),
             ),
@@ -1440,6 +1579,24 @@ class _AddLedgerEntrySheetState extends State<AddLedgerEntrySheet> {
 
   bool get _isEditMode => widget.existingEntry != null;
 
+  // ---- Quick Calculator (shown only in Edit mode) ----
+  // ---- Quick Calculator (shown only in Edit mode) ----
+  bool _showCalculator = false;
+  String _calcDisplay = '0';
+  String _calcExpression = '';
+  double _calcAccumulator = 0;
+  String? _calcPendingOperator;
+  bool _calcWaitingForOperand = false;
+  bool _calcJustEvaluated = false;
+
+  double get _calcValue => double.tryParse(_calcDisplay) ?? 0;
+
+  /// What the preview line shows: the running expression plus whatever is
+  /// currently on the display (e.g. "10 +" while typing → "10 + 10" once
+  /// the second number is entered → "10 + 10 =" after equals).
+  String get _calcPreview =>
+      _calcExpression.isEmpty ? _calcDisplay : '$_calcExpression $_calcDisplay';
+
   @override
   void initState() {
     super.initState();
@@ -1449,6 +1606,9 @@ class _AddLedgerEntrySheetState extends State<AddLedgerEntrySheet> {
     _amountController = TextEditingController(
       text: existing == null ? '' : existing.amount.toStringAsFixed(2),
     );
+    if (existing != null) {
+      _calcDisplay = _formatCalcResult(existing.amount);
+    }
     _categoryController =
         TextEditingController(text: existing?.category ?? 'Capital');
     _dateController = TextEditingController(
@@ -1485,6 +1645,115 @@ class _AddLedgerEntrySheetState extends State<AddLedgerEntrySheet> {
     }
   }
 
+  String _formatCalcResult(double v) {
+    if (v == v.roundToDouble() && v.abs() < 1e12) {
+      return v.toInt().toString();
+    }
+    return v
+        .toStringAsFixed(2)
+        .replaceFirst(RegExp(r'0+$'), '')
+        .replaceFirst(RegExp(r'\.$'), '');
+  }
+
+  double _calcOp(double a, double b, String op) {
+    switch (op) {
+      case '+':
+        return a + b;
+      case '−':
+        return a - b;
+      case '×':
+        return a * b;
+      case '÷':
+        return b == 0 ? 0 : a / b;
+      default:
+        return b;
+    }
+  }
+
+  void _calcInputDigit(String digit) {
+    setState(() {
+      if (_calcJustEvaluated) {
+        _calcExpression = '';
+        _calcAccumulator = 0;
+        _calcPendingOperator = null;
+        _calcJustEvaluated = false;
+        _calcDisplay = digit;
+        _calcWaitingForOperand = false;
+      } else if (_calcWaitingForOperand) {
+        _calcDisplay = digit;
+        _calcWaitingForOperand = false;
+      } else {
+        _calcDisplay = _calcDisplay == '0' ? digit : '$_calcDisplay$digit';
+      }
+      _amountController.text = _calcDisplay;
+    });
+  }
+
+  void _calcInputDecimal() {
+    setState(() {
+      if (_calcJustEvaluated) {
+        _calcExpression = '';
+        _calcAccumulator = 0;
+        _calcPendingOperator = null;
+        _calcJustEvaluated = false;
+        _calcDisplay = '0.';
+        _calcWaitingForOperand = false;
+      } else if (_calcWaitingForOperand) {
+        _calcDisplay = '0.';
+        _calcWaitingForOperand = false;
+      } else if (!_calcDisplay.contains('.')) {
+        _calcDisplay = '$_calcDisplay.';
+      }
+      _amountController.text = _calcDisplay;
+    });
+  }
+
+  void _calcClear() {
+    setState(() {
+      _calcDisplay = '0';
+      _calcExpression = '';
+      _calcAccumulator = 0;
+      _calcPendingOperator = null;
+      _calcWaitingForOperand = false;
+      _calcJustEvaluated = false;
+      _amountController.text = _calcDisplay;
+    });
+  }
+
+  void _calcOperator(String op) {
+    final input = _calcValue;
+    setState(() {
+      if (_calcPendingOperator != null && !_calcWaitingForOperand) {
+        _calcAccumulator =
+            _calcOp(_calcAccumulator, input, _calcPendingOperator!);
+        _calcDisplay = _formatCalcResult(_calcAccumulator);
+      } else {
+        _calcAccumulator = input;
+      }
+      _calcExpression = '${_formatCalcResult(_calcAccumulator)} $op';
+      _calcPendingOperator = op;
+      _calcWaitingForOperand = true;
+      _calcJustEvaluated = false;
+      _amountController.text = _calcDisplay;
+    });
+  }
+
+  void _calcEquals() {
+    if (_calcPendingOperator == null) return;
+    final input = _calcValue;
+    final fullExpression = '$_calcExpression $_calcDisplay';
+    final result = _calcOp(_calcAccumulator, input, _calcPendingOperator!);
+    setState(() {
+      _calcExpression = '$fullExpression =';
+      _calcDisplay = _formatCalcResult(result);
+      _calcAccumulator = result;
+      _calcPendingOperator = null;
+      _calcWaitingForOperand = true;
+      _calcJustEvaluated = true;
+      _amountController.text = _calcDisplay;
+    });
+  }
+
   // Open Down-to-Up Stylish Custom Dropdown Sheet
   void _openEntryTypePicker() {
     final l10n = AppLocalizations.of(context);
@@ -1506,8 +1775,8 @@ class _AddLedgerEntrySheetState extends State<AddLedgerEntrySheet> {
               children: [
                 // Group 1: Cash In Hand
                 Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: Text(
                     localizedTabLabel('Cash In Hand', l10n),
                     style: const TextStyle(
@@ -1526,8 +1795,8 @@ class _AddLedgerEntrySheetState extends State<AddLedgerEntrySheet> {
 
                 // Group 2: Outstanding Lent
                 Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: Text(
                     localizedTabLabel('Outstanding Lent', l10n),
                     style: const TextStyle(
@@ -1727,7 +1996,45 @@ class _AddLedgerEntrySheetState extends State<AddLedgerEntrySheet> {
               final amountField = Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildLabel(l10n.accountAmountLabel),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _buildLabel(l10n.accountAmountLabel),
+                      if (_isEditMode)
+                        InkWell(
+                          onTap: () => setState(
+                              () => _showCalculator = !_showCalculator),
+                          borderRadius: BorderRadius.circular(6),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 2, vertical: 2),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  _showCalculator
+                                      ? Icons.calculate
+                                      : Icons.calculate_outlined,
+                                  size: 13,
+                                  color: const Color(0xFFB8860B),
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _showCalculator
+                                      ? 'Hide calculator'
+                                      : 'Show calculator',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFFB8860B),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                   const SizedBox(height: 6),
                   TextField(
                     controller: _amountController,
@@ -1759,9 +2066,14 @@ class _AddLedgerEntrySheetState extends State<AddLedgerEntrySheet> {
             },
           ),
 
+          if (_isEditMode && _showCalculator) ...[
+            const SizedBox(height: 12),
+            _buildQuickCalculator(),
+          ],
           const SizedBox(height: 16),
 
           // Responsive Row for Category & Date
+
           LayoutBuilder(
             builder: (context, constraints) {
               final isNarrow = constraints.maxWidth < 500;
@@ -1888,6 +2200,145 @@ class _AddLedgerEntrySheetState extends State<AddLedgerEntrySheet> {
         fontSize: 11,
         fontWeight: FontWeight.bold,
         color: Colors.black54,
+      ),
+    );
+  }
+
+  Widget _buildQuickCalculator() {
+    return Container(
+      margin: const EdgeInsets.only(top: 4, bottom: 4),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF9FAFB),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.calculate_outlined,
+                      size: 14, color: Color(0xFFB8860B)),
+                  SizedBox(width: 6),
+                  Text(
+                    'Quick Calculator',
+                    style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black54),
+                  ),
+                ],
+              ),
+              InkWell(
+                onTap: _calcClear,
+                child: const Text(
+                  'Clear',
+                  style: TextStyle(fontSize: 11, color: Color(0xFFB8860B)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // Expression preview: shows each key press, e.g. "10 + 10" then
+          // "10 + 10 =" once equals is pressed.
+          Padding(
+            padding: const EdgeInsets.only(left: 2, bottom: 4),
+            child: Text(
+              _calcPreview,
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                fontSize: 12,
+                color: Colors.black45,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            child: Text(
+              '₹ $_calcDisplay',
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF1E293B)),
+            ),
+          ),
+          const SizedBox(height: 8),
+          _calcRow(['7', '8', '9', '÷']),
+          const SizedBox(height: 6),
+          _calcRow(['4', '5', '6', '×']),
+          const SizedBox(height: 6),
+          _calcRow(['1', '2', '3', '−']),
+          const SizedBox(height: 6),
+          _calcRow(['0', '.', '=', '+']),
+        ],
+      ),
+    );
+  }
+
+  Widget _calcRow(List<String> keys) {
+    return Row(children: keys.map(_calcKey).toList());
+  }
+
+  Widget _calcKey(String label) {
+    final isOperator = ['÷', '×', '−', '+'].contains(label);
+    final isEquals = label == '=';
+
+    final VoidCallback onTap;
+    switch (label) {
+      case '.':
+        onTap = _calcInputDecimal;
+        break;
+      case '=':
+        onTap = _calcEquals;
+        break;
+      case '÷':
+      case '×':
+      case '−':
+      case '+':
+        onTap = () => _calcOperator(label);
+        break;
+      default:
+        onTap = () => _calcInputDigit(label);
+    }
+
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 3),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            height: 40,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: (isOperator || isEquals)
+                  ? const Color(0xFFB8860B)
+                  : Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: (isOperator || isEquals) ? Colors.white : Colors.black87,
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

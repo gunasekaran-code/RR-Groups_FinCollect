@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config/api_config.dart';
@@ -109,6 +110,66 @@ class CustomerApiService {
         .toList();
   }
 
+  /// One customer with every column, including the KYC images that the
+  /// list endpoint deliberately leaves out, plus the login email, which
+  /// lives on the linked `profiles` row rather than on `customers`.
+  ///
+  /// The columns are named one by one on purpose: rest.php treats
+  /// `select=*` the same as no select at all and still strips the heavy
+  /// image columns. Only naming them explicitly brings them back.
+  static const _fullColumns = [
+    'id', 'customer_id', 'full_name', 'mobile', 'alt_mobiles', 'address', 'aadhaar', 'pan',
+    'occupation', 'photo_url', 'aadhaar_front_url', 'aadhaar_back_url',
+    'pan_url', 'signature_url', 'latitude', 'longitude', 'loan_status',
+    'assigned_agent', 'created_at',
+  ];
+
+  Future<Customer> fetchById(String id) async {
+    final res = await _client.get(
+      Uri.parse('$_restEndpoint?table=customers&id=eq.$id'
+          '&select=${_fullColumns.join(',')}'),
+      headers: _headers,
+    );
+    final data = _decodeObject(res);
+    if (data.isEmpty) {
+      throw CustomerApiException('Customer not found', 404);
+    }
+
+    // The email is a nicety for the edit form; a failure here must not
+    // stop the customer's own details from loading.
+    try {
+      final loginRes = await _client.get(
+        Uri.parse(
+            '$_restEndpoint?table=profiles&role=eq.customer&customer_id=eq.$id&select=id,email'),
+        headers: _headers,
+      );
+      final logins = _decodeList(loginRes);
+      if (logins.isNotEmpty && logins.first is Map) {
+        final email = (logins.first as Map)['email']?.toString();
+        if (email != null && email.isNotEmpty) data['email'] = email;
+      }
+    } catch (_) {}
+
+    return Customer.fromJson(data);
+  }
+
+  /// A customer's profile photo as raw bytes, served by photo.php. Null when
+  /// none has been taken (the endpoint answers 204) or it cannot be read.
+  Future<Uint8List?> fetchPhotoBytes(String id,
+      {String column = 'photo_url'}) async {
+    final res = await _client.get(
+      Uri.parse(
+          '$_baseUrl/photo.php?table=customers&id=${Uri.encodeQueryComponent(id)}&col=$column'),
+      headers: {
+        'Accept': 'image/*',
+        if (_headers['Authorization'] != null)
+          'Authorization': _headers['Authorization']!,
+      },
+    );
+    if (res.statusCode != 200 || res.bodyBytes.isEmpty) return null;
+    return res.bodyBytes;
+  }
+
   Future<Customer> create(Customer customer,
       {String? email, String? password}) async {
     final res = await _client.post(
@@ -176,6 +237,25 @@ class CustomerApiService {
     return _decodeObject(res);
   }
 
+  /// Replaces a single document/photo column (`photo_url`,
+  /// `aadhaar_front_url`, `aadhaar_back_url`, `pan_url`, `signature_url`)
+  /// on [id]. rest.php lets admins write any column and agents exactly these
+  /// KYC columns, so this works for both roles.
+  Future<void> updateDocument(String id, String column, String dataUri) async {
+    final res = await postWithMethodOverride(
+      Uri.parse('$_restEndpoint?table=customers&id=eq.$id'),
+      method: 'PATCH',
+      headers: _headers,
+      body: jsonEncode({column: dataUri}),
+    );
+    // An empty result means no row matched — the customer is gone or out of
+    // this user's scope — so nothing was saved.
+    if (_decodeObject(res).isEmpty) {
+      throw CustomerApiException(
+          'This customer could not be updated.', res.statusCode);
+    }
+  }
+
   Future<void> delete(String id) async {
     final res = await postWithMethodOverride(
       Uri.parse('$_restEndpoint?table=customers&id=eq.$id'),
@@ -220,6 +300,9 @@ class CustomerApiService {
             map['name']?.toString() ??
             'Unknown',
         'email': map['email']?.toString() ?? '',
+        // For pickers that search by customer code or mobile number.
+        'code': map['customer_id']?.toString() ?? '',
+        'mobile': (map['mobile'] ?? map['phone'])?.toString() ?? '',
       };
     }).toList();
   }

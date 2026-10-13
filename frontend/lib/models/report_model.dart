@@ -262,8 +262,10 @@ class MonthlyReportSummary {
     required this.collected,
     required this.collectionCount,
     required this.newCustomers,
+    this.activeCustomers = 0,
     required this.activeLoans,
     required this.overdueLoans,
+    this.totalInterest = 0,
   });
 
   final double disbursement;
@@ -271,8 +273,11 @@ class MonthlyReportSummary {
   final double collected;
   final int collectionCount;
   final int newCustomers;
+  final int activeCustomers;
   final int activeLoans;
   final int overdueLoans;
+  /// Interest across every loan, not just the report's date range.
+  final double totalInterest;
 
   factory MonthlyReportSummary.fromJson(Map<String, dynamic> json) => MonthlyReportSummary(
         disbursement: _toDouble(json['disbursement']),
@@ -280,8 +285,10 @@ class MonthlyReportSummary {
         collected: _toDouble(json['collected']),
         collectionCount: _toInt(json['collection_count']),
         newCustomers: _toInt(json['new_customers']),
+        activeCustomers: _toInt(json['active_customers']),
         activeLoans: _toInt(json['active_loans']),
         overdueLoans: _toInt(json['overdue_loans']),
+        totalInterest: _toDouble(json['total_interest']),
       );
 }
 

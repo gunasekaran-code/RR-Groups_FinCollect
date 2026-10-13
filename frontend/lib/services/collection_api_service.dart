@@ -113,12 +113,16 @@ class CollectionApiService {
     int limit = 200,
     int offset = 0,
     String order = 'collection_date.desc',
+    String? agentId,
+    DateTime? fromDate,
   }) async {
     final res = await http.get(
       _uri({
         'limit': limit.toString(),
         'offset': offset.toString(),
         'order': order,
+        if (agentId != null && agentId.isNotEmpty) 'agent_id': 'eq.$agentId',
+        if (fromDate != null) 'collection_date': 'gte.${_dateOnly(fromDate)}',
       }),
       headers: await _headers(),
     );
@@ -132,6 +136,11 @@ class CollectionApiService {
     final List list = decoded is List ? decoded : (decoded['data'] ?? []);
     return list.cast<Map<String, dynamic>>();
   }
+
+  static String _dateOnly(DateTime date) =>
+      '${date.year.toString().padLeft(4, '0')}-'
+      '${date.month.toString().padLeft(2, '0')}-'
+      '${date.day.toString().padLeft(2, '0')}';
 
   /// GET payment history -> collections rows that are actually paid/collected,
   /// parsed into PaymentHistoryItem and scoped by the loan ids the caller

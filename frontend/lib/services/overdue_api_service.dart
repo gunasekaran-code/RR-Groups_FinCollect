@@ -1,8 +1,9 @@
 import 'dart:convert';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import '../models/overdue.dart';
 import '../config/api_config.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'session_service.dart';
 
 /// Talks to backend/overdue.php.
 ///
@@ -21,12 +22,12 @@ class OverdueApiService {
   OverdueApiService({http.Client? client}) : _client = client ?? http.Client();
 
   final http.Client _client;
+  static const _secureStorage = FlutterSecureStorage();
 
   Uri get _endpoint => Uri.parse('${ApiConfig.normalizedBaseUrl}/overdue.php');
 
   Future<Map<String, String>> _headers() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('auth_token'); // match your login save key
+    final token = await _secureStorage.read(key: 'auth_token');
     return {
       'Content-Type': 'application/json',
       if (token != null) 'Authorization': 'Bearer $token',
@@ -38,6 +39,7 @@ class OverdueApiService {
   /// reconciles loan statuses on every GET, per the PHP).
   Future<List<OverdueAccount>> fetchOverdueAccounts() async {
     final res = await _client.get(_endpoint, headers: await _headers());
+    await SessionService.instance.handleUnauthorized(res);
     _throwIfError(res);
 
     final decoded = jsonDecode(res.body);
@@ -55,6 +57,7 @@ class OverdueApiService {
   /// otherwise. Returns the number of loans whose status changed.
   Future<int> recomputeOverdues() async {
     final res = await _client.post(_endpoint, headers: await _headers());
+    await SessionService.instance.handleUnauthorized(res);
     _throwIfError(res);
 
     final decoded = jsonDecode(res.body) as Map<String, dynamic>;

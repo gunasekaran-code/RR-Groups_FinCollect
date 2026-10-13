@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import '../config/api_config.dart';
 import '../models/report_model.dart';
 import 'session_service.dart';
+import 'session_http_client.dart';
 
 class ReportApiException implements Exception {
   ReportApiException(this.message, this.statusCode);
@@ -74,6 +75,8 @@ class ReportService {
             'Authorization': 'Bearer $token',
         },
       ).timeout(const Duration(seconds: 20));
+    } on SessionExpiredException {
+      rethrow;
     } catch (_) {
       throw ReportApiException(
         'Could not reach the reports server. Check your connection and try again.',

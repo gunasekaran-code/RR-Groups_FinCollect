@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'auth_api_service.dart'; // adjust import path to wherever this actually lives
 import '../config/api_config.dart';
 import 'method_override_http.dart';
+import 'session_http_client.dart';
 
 /// Counts shown in the "Collection Status" sheet for a single agent.
 class AgentCollectionSummary {
@@ -85,6 +86,8 @@ class AgentApiService {
       res = await http
           .get(_profilesUri(), headers: await _headers())
           .timeout(const Duration(seconds: 15));
+    } on SessionExpiredException {
+      rethrow;
     } catch (_) {
       throw ApiException(
           'Could not reach the server. Check your connection and try again.',
@@ -107,6 +110,8 @@ class AgentApiService {
           .post(Uri.parse(_userEndpoint),
               headers: await _headers(), body: jsonEncode(data))
           .timeout(const Duration(seconds: 15));
+    } on SessionExpiredException {
+      rethrow;
     } catch (_) {
       throw ApiException(
           'Could not reach the server. Check your connection and try again.',
@@ -130,6 +135,8 @@ class AgentApiService {
         headers: await _headers(),
         body: jsonEncode(data),
       ).timeout(const Duration(seconds: 15));
+    } on SessionExpiredException {
+      rethrow;
     } catch (_) {
       throw ApiException(
           'Could not reach the server. Check your connection and try again.',
@@ -148,6 +155,8 @@ class AgentApiService {
         method: 'DELETE',
         headers: await _headers(),
       ).timeout(const Duration(seconds: 15));
+    } on SessionExpiredException {
+      rethrow;
     } catch (_) {
       throw ApiException(
           'Could not reach the server. Check your connection and try again.',
@@ -181,6 +190,8 @@ class AgentApiService {
             headers: await _headers(),
           )
           .timeout(const Duration(seconds: 15));
+    } on SessionExpiredException {
+      rethrow;
     } catch (_) {
       throw ApiException(
           'Could not reach the server. Check your connection and try again.',

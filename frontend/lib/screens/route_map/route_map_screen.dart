@@ -25,6 +25,7 @@ import '../../theme/app_theme.dart';
 import '../../theme/glass_toast.dart';
 import '../../widgets/app_shell.dart';
 import '../../widgets/empty_state.dart';
+import '../../widgets/responsive_stat_grid.dart';
 
 String _money(double v) => AgentCollectionItem.formatAmount(v);
 
@@ -297,41 +298,74 @@ class _RouteMapScreenState extends State<RouteMapScreen> {
           ],
         ),
         const SizedBox(height: 16),
-        GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 1.5,
+        Row(
           children: [
-            _StatCard(
-              icon: Icons.people_alt_rounded,
-              iconBg: const Color(0xFFFEF3C7),
-              iconColor: AppColors.kWarning,
-              label: 'Total Stops',
-              value: '${summary.totalStops}',
+            Expanded(
+              child: _RouteStatCard(
+                icon: Icons.people_outline_rounded,
+                iconBg: const Color(0xFFFEF3C7),
+                iconColor: AppColors.kGoldDark,
+                label: 'Total Stops',
+                value: '${summary.totalStops}',
+              ),
             ),
-            _StatCard(
-              icon: Icons.check_circle_outline_rounded,
-              iconBg: const Color(0xFFDCFCE7),
-              iconColor: AppColors.kSuccess,
-              label: 'Completed',
-              value: '${summary.completedToday}',
+            const SizedBox(width: 12),
+            Expanded(
+              child: _RouteStatCard(
+                icon: Icons.check_circle_outline_rounded,
+                iconBg: const Color(0xFFDCFCE7),
+                iconColor: AppColors.kSuccess,
+                label: 'Completed',
+                value: '${summary.completedToday}',
+              ),
             ),
-            _StatCard(
-              icon: Icons.access_time_rounded,
-              iconBg: const Color(0xFFDCEAFE),
-              iconColor: AppColors.kInfo,
-              label: 'Remaining',
-              value: '${summary.remaining}',
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _RouteStatCard(
+                icon: Icons.access_time_rounded,
+                iconBg: const Color(0xFFFEF3C7),
+                iconColor: AppColors.kWarning,
+                label: 'Remaining',
+                value: '${summary.remaining}',
+              ),
             ),
-            _StatCard(
-              icon: Icons.account_balance_wallet_outlined,
-              iconBg: const Color(0xFFFDEBEC),
-              iconColor: AppColors.kDanger,
-              label: 'Pending',
-              value: _money(summary.pendingAmount),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _RouteStatCard(
+                icon: Icons.payments_outlined,
+                iconBg: const Color(0xFFDCFCE7),
+                iconColor: AppColors.kSuccess,
+                label: 'Collected Today',
+                value: _money(summary.collectedToday),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _RouteStatCard(
+                icon: Icons.account_balance_wallet_outlined,
+                iconBg: const Color(0xFFEDE9FE),
+                iconColor: const Color(0xFF7C3AED),
+                label: 'Pending',
+                value: _money(summary.pendingAmount),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _RouteStatCard(
+                icon: Icons.warning_amber_rounded,
+                iconBg: const Color(0xFFFDEBEC),
+                iconColor: AppColors.kDanger,
+                label: 'Penalty',
+                value: _money(summary.penaltyAmount),
+              ),
             ),
           ],
         ),
@@ -483,13 +517,7 @@ class _RouteMapScreenState extends State<RouteMapScreen> {
           ],
         ),
         const SizedBox(height: 16),
-        GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 1.5,
+        ResponsiveStatGrid(
           children: [
             _StatCard(
               icon: Icons.groups_2_outlined,
@@ -763,111 +791,130 @@ class _StopCard extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(14),
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: AppColors.kSurface,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: AppColors.kBorder),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.03),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Top Section: Index, Name, Code, Amount
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _IndexBadge(index: index),
-                const SizedBox(width: 10),
+                _IndexBadge(index: index, size: 42),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
+                      Text(
+                        stop.name,
+                        // No ellipsis: forces full name to be visible, wrapping if necessary
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                          color: AppColors.kTextDark,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
                         children: [
-                          Expanded(
-                            child: Text(stop.name,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 15,
-                                    color: AppColors.kTextDark)),
-                          ),
-                          const SizedBox(width: 6),
                           Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 3),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: AppColors.kBorder.withValues(alpha: 0.4),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              stop.code,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.kTextDark,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
                               color: statusBg,
-                              borderRadius: BorderRadius.circular(8),
+                              borderRadius: BorderRadius.circular(6),
                             ),
                             child: Text(
                               stop.overdue ? 'Overdue' : 'Pending',
                               style: TextStyle(
-                                  color: statusColor,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700),
+                                color: statusColor,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 2),
-                      Text('${stop.code} • ${_money(stop.pendingAmount)}',
-                          style: const TextStyle(
-                              fontSize: 12, color: AppColors.kTextMuted)),
                     ],
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: onCall,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.kTextDark,
-                      side: const BorderSide(color: AppColors.kBorder),
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                    ),
-                    icon: const Icon(Icons.phone_outlined, size: 16),
-                    label: const Text('Call'),
-                  ),
-                ),
                 const SizedBox(width: 8),
-                Expanded(
-                  flex: 2,
-                  child: ElevatedButton.icon(
-                    onPressed: onNavigate,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.kGoldDark,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    const Text(
+                      'Due Amount',
+                      style: TextStyle(
+                        fontSize: 11, 
+                        color: AppColors.kTextMuted, 
+                        fontWeight: FontWeight.w600
+                      ),
                     ),
-                    icon: const Icon(Icons.navigation_outlined, size: 16),
-                    label: const Text('Navigate'),
-                  ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _money(stop.pendingAmount),
+                      // No ellipsis: forces full amount to be visible
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: statusColor,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 14),
+              child: Divider(height: 1, color: AppColors.kBorder),
+            ),
+
+            // Middle Section: Address
             if (stop.hasAddress)
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.location_on_outlined,
-                      size: 15, color: AppColors.kTextMuted),
-                  const SizedBox(width: 5),
+                  const Icon(Icons.location_on_outlined, size: 18, color: AppColors.kTextMuted),
+                  const SizedBox(width: 8),
                   Expanded(
-                    child: Text(stop.address!,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 12, color: AppColors.kTextMuted)),
+                    child: Text(
+                      stop.address!,
+                      style: const TextStyle(
+                        fontSize: 13, 
+                        color: AppColors.kTextMuted, 
+                        height: 1.4,
+                      ),
+                    ),
                   ),
                 ],
               )
@@ -876,6 +923,45 @@ class _StopCard extends StatelessWidget {
                 'No address on file — add it in Customers for exact directions.',
                 dense: true,
               ),
+            
+            const SizedBox(height: 16),
+            
+            // Bottom Section: Actions
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onCall,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.kTextDark,
+                      side: const BorderSide(color: AppColors.kBorder),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    icon: const Icon(Icons.phone_outlined, size: 18),
+                    label: const Text('Call', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: onNavigate,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.kGoldDark,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    icon: const Icon(Icons.near_me_outlined, size: 18),
+                    label: const Text('Navigate', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),
@@ -907,12 +993,19 @@ class _AgentCard extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(14),
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: AppColors.kSurface,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: AppColors.kBorder),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.03),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -920,58 +1013,98 @@ class _AgentCard extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _IndexBadge(index: index),
-                const SizedBox(width: 10),
+                _IndexBadge(index: index, size: 42),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(agent.fullName,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 15,
-                                    color: AppColors.kTextDark)),
-                          ),
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: statusBg,
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              agent.isActive ? 'Active' : 'Inactive',
-                              style: TextStyle(
-                                  color: statusColor,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 2),
                       Text(
-                        '${agent.customerCount} customers • ${agent.activeCount} active • ${agent.overdueCount} overdue',
+                        agent.fullName,
                         style: const TextStyle(
-                            fontSize: 12, color: AppColors.kTextMuted),
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                          color: AppColors.kTextDark,
+                        ),
                       ),
-                      const SizedBox(height: 2),
-                      Text('Pending: ${_money(agent.pendingAmount)}',
-                          style: const TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.kTextDark)),
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: statusBg,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          agent.isActive ? 'Active' : 'Inactive',
+                          style: TextStyle(
+                            color: statusColor,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
                     ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    const Text(
+                      'Pending',
+                      style: TextStyle(
+                        fontSize: 11, 
+                        color: AppColors.kTextMuted, 
+                        fontWeight: FontWeight.w600
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _money(agent.pendingAmount),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.kTextDark,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 14),
+              child: Divider(height: 1, color: AppColors.kBorder),
+            ),
+
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.analytics_outlined, size: 18, color: AppColors.kTextMuted),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${agent.customerCount} assigned • ${agent.activeCount} active • ${agent.overdueCount} overdue',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.kTextMuted,
+                      height: 1.4,
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 10),
+
+            if (!agent.hasLocation) ...[
+              const SizedBox(height: 12),
+              const _InlineNote(
+                'No mapped location — this agent\'s customers have no coordinates on file.',
+                dense: true,
+              ),
+            ],
+            
+            const SizedBox(height: 16),
+            
             Row(
               children: [
                 Expanded(
@@ -980,40 +1113,34 @@ class _AgentCard extends StatelessWidget {
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppColors.kTextDark,
                       side: const BorderSide(color: AppColors.kBorder),
-                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                     ),
-                    icon: const Icon(Icons.phone_outlined, size: 16),
-                    label: const Text('Call'),
+                    icon: const Icon(Icons.phone_outlined, size: 18),
+                    label: const Text('Call', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 12),
                 Expanded(
-                  flex: 2,
                   child: ElevatedButton.icon(
                     onPressed: agent.hasLocation ? onNavigate : null,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.kGoldDark,
                       foregroundColor: Colors.white,
                       disabledBackgroundColor: AppColors.kBorder,
-                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                     ),
-                    icon: const Icon(Icons.navigation_outlined, size: 16),
-                    label: const Text('Navigate'),
+                    icon: const Icon(Icons.navigation_outlined, size: 18),
+                    label: const Text('Navigate', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
                   ),
                 ),
               ],
             ),
-            if (!agent.hasLocation) ...[
-              const SizedBox(height: 8),
-              const _InlineNote(
-                'No mapped location — this agent\'s customers have no coordinates on file.',
-                dense: true,
-              ),
-            ],
           ],
         ),
       ),
@@ -1022,23 +1149,24 @@ class _AgentCard extends StatelessWidget {
 }
 
 class _IndexBadge extends StatelessWidget {
-  const _IndexBadge({required this.index});
+  const _IndexBadge({required this.index, this.size = 28});
   final int index;
+  final double size;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 28,
-      height: 28,
+      width: size,
+      height: size,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: const Color(0xFFFEF3C7),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text('$index',
-          style: const TextStyle(
+          style: TextStyle(
               fontWeight: FontWeight.w700,
-              fontSize: 12,
+              fontSize: size * 0.43,
               color: AppColors.kGoldDark)),
     );
   }
@@ -1241,6 +1369,82 @@ class _DetailSheet extends StatelessWidget {
   }
 }
 
+/// Compact horizontal stat tile used on the agent's "Today's Route" view:
+/// icon on the left, small uppercase label above the value.
+class _RouteStatCard extends StatelessWidget {
+  const _RouteStatCard({
+    required this.icon,
+    required this.iconBg,
+    required this.iconColor,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final Color iconBg;
+  final Color iconColor;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+      decoration: BoxDecoration(
+        color: AppColors.kSurface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.kBorder),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: iconBg,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: iconColor, size: 20),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label.toUpperCase(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.kTextMuted,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    value,
+                    style: const TextStyle(
+                      color: AppColors.kTextDark,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _StatCard extends StatelessWidget {
   const _StatCard({
     required this.icon,
@@ -1278,6 +1482,7 @@ class _StatCard extends StatelessWidget {
                   alignment: Alignment.centerLeft,
                   child: Text(
                     value,
+                    maxLines: 1,
                     style: const TextStyle(
                       color: AppColors.kTextDark,
                       fontSize: 22,

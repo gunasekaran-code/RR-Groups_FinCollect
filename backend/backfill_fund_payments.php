@@ -5,6 +5,9 @@
 // clearly marked as opening entries.  Safe to re-run: only fills what's missing.
 require_once __DIR__ . '/bootstrap.php';
 
+
+// Not a public URL. See require_maintenance_admin() in bootstrap.php.
+require_maintenance_admin();
 $pdo = Database::pdo();
 $funds = $pdo->query("SELECT * FROM funds WHERE collected_amount > 0")->fetchAll();
 

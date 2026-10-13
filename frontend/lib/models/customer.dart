@@ -1,3 +1,5 @@
+import '../widgets/phone_numbers_field.dart';
+
 class Customer {
   final String id;
 
@@ -5,6 +7,10 @@ class Customer {
   final String customerId;
   final String fullName;
   final String? mobile;
+
+  /// Extra contact numbers (the `alt_mobiles` column). Never used for
+  /// sign-in — that is always [mobile].
+  final List<String> altMobiles;
   final String? address;
   final String? aadhaar;
   final String? pan;
@@ -23,6 +29,11 @@ class Customer {
   final String? panUrl;
   final String? signatureUrl;
 
+  /// The list endpoint leaves the image columns out and sends `has_photo`
+  /// instead, so a card knows whether there is an avatar worth fetching
+  /// from photo.php without carrying the picture itself.
+  final bool hasPhoto;
+
   final String? assignedAgent;
   final String? assignedAgentName;
   final double? latitude;
@@ -35,6 +46,7 @@ class Customer {
     this.customerId = '',
     required this.fullName,
     this.mobile,
+    this.altMobiles = const [],
     this.address,
     this.aadhaar,
     this.pan,
@@ -45,6 +57,7 @@ class Customer {
     this.aadhaarBackUrl,
     this.panUrl,
     this.signatureUrl,
+    this.hasPhoto = false,
     this.assignedAgent,
     this.assignedAgentName,
     this.latitude,
@@ -77,15 +90,20 @@ class Customer {
               'Unnamed')
           .toString(),
       mobile: (json['mobile'] ?? json['phone'])?.toString(),
+      altMobiles: PhoneNumbersController.parse(json['alt_mobiles']),
       address: json['address']?.toString(),
       aadhaar: json['aadhaar']?.toString(),
       pan: json['pan']?.toString(),
+      email: nonEmpty(json['email']),
       occupation: json['occupation']?.toString(),
       photoUrl: nonEmpty(json['photo_url']),
       aadhaarFrontUrl: nonEmpty(json['aadhaar_front_url']),
       aadhaarBackUrl: nonEmpty(json['aadhaar_back_url']),
       panUrl: nonEmpty(json['pan_url']),
       signatureUrl: nonEmpty(json['signature_url']),
+      hasPhoto: nonEmpty(json['photo_url']) != null ||
+          json['has_photo'] == true ||
+          json['has_photo']?.toString() == '1',
       assignedAgent: json['assigned_agent']?.toString(),
       assignedAgentName: json['assigned_agent_name']?.toString(),
       latitude: toDouble(json['latitude']),
@@ -104,6 +122,7 @@ class Customer {
     final body = <String, dynamic>{
       'full_name': fullName,
       'mobile': mobile,
+      'alt_mobiles': PhoneNumbersController.encode(altMobiles),
       'address': address,
       'aadhaar': aadhaar,
       'pan': pan,
@@ -163,6 +182,7 @@ class Customer {
       customerId: customerId,
       fullName: fullName,
       mobile: mobile,
+      altMobiles: altMobiles,
       address: address,
       aadhaar: aadhaar,
       pan: pan,
@@ -173,6 +193,7 @@ class Customer {
       aadhaarBackUrl: aadhaarBackUrl ?? this.aadhaarBackUrl,
       panUrl: panUrl ?? this.panUrl,
       signatureUrl: signatureUrl ?? this.signatureUrl,
+      hasPhoto: hasPhoto,
       assignedAgent: assignedAgent,
       assignedAgentName: assignedAgentName,
       latitude: latitude,

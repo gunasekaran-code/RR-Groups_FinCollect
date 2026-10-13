@@ -17,9 +17,57 @@
  * this against a database whose admin uses a different address would delete
  * every login and lock everybody out.
  *
+ * On the CLI only, --db=<name> runs the whole thing against another database on
+ * the same server. That is how it is rehearsed: restore a backup into a scratch
+ * database, reset that, and look at what came out before pointing it at the real
+ * one. It is deliberately not reachable over HTTP — a URL that can name its own
+ * target is a URL that can empty a database nobody meant to name.
+ *
  * DELETE THIS FILE once the reset is done. Anyone who can reach the URL can
  * empty the database.
  */
+// ── Not a public URL ─────────────────────────────────────────────────────
+// This shipped with no authentication at all, on a live site, and it can
+// destroy the business's records. bootstrap.php is deliberately not used
+// here — it runs schema migrations at include time — so the same rule is
+// applied with just config and the JWT class, neither of which does anything
+// on its own.
+(function (): void {
+    if (php_sapi_name() === 'cli') return;   // shell access already outranks this
+
+    require_once __DIR__ . '/core/Jwt.php';
+    if (!function_exists('config')) {
+        $__cfg = require __DIR__ . '/config.php';
+        function config(string $k, $d = null) {
+            static $c = null;
+            if ($c === null) $c = require __DIR__ . '/config.php';
+            return $c[$k] ?? $d;
+        }
+    }
+
+    $hdr = $_SERVER['HTTP_AUTHORIZATION']
+        ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION']
+        ?? $_SERVER['HTTP_X_AUTHORIZATION']
+        ?? '';
+    if (!$hdr && function_exists('getallheaders')) {
+        $h = getallheaders();
+        $hdr = $h['Authorization'] ?? $h['authorization'] ?? '';
+    }
+    if (!$hdr && !empty($_GET['token'])) $hdr = 'Bearer ' . $_GET['token'];
+    $token = preg_match('/Bearer\s+(.+)/i', $hdr, $m) ? trim($m[1]) : trim((string)$hdr);
+
+    $claims = $token !== '' ? Jwt::decode($token) : null;
+    if (strtolower(trim((string)($claims['role'] ?? ''))) !== 'admin') {
+        http_response_code(403);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo "Forbidden.\n\n";
+        echo "This is a maintenance script. Run it from the command line, or\n";
+        echo "append ?token=<your admin token> to the URL.\n\n";
+        echo "Better still: delete it. It was written for one deploy, and a\n";
+        echo "file that can rewrite or erase the books should not outlive the job.\n";
+        exit;
+    }
+})();
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
 ini_set('max_execution_time', 300);
@@ -35,9 +83,11 @@ $confirmed = $isCli
     ? in_array('--confirm', $argvFlags, true)
     : (($_GET['confirm'] ?? '') === 'YES-DELETE-EVERYTHING');
 
-$keepEmail = 'admin@fincollect.in';
+$keepEmail  = 'admin@fincollect.in';
+$dbOverride = '';
 foreach ($argvFlags as $a) {
-    if (str_starts_with($a, '--keep-admin=')) $keepEmail = substr($a, 13);
+    if (str_starts_with($a, '--keep-admin=')) $keepEmail  = substr($a, 13);
+    if (str_starts_with($a, '--db='))         $dbOverride = substr($a, 5);
 }
 if (!$isCli && !empty($_GET['keep_admin'])) $keepEmail = (string)$_GET['keep_admin'];
 
@@ -60,6 +110,7 @@ function finish(array $report, bool $isCli): void
 try {
     $cfg = require __DIR__ . '/config.php';
     $d   = $cfg['db'];
+    if ($dbOverride !== '') $d['name'] = $dbOverride;
     $pdo = new PDO(
         "mysql:host={$d['host']};port={$d['port']};dbname={$d['name']};charset=utf8mb4",
         $d['user'], $d['pass'],
@@ -78,9 +129,9 @@ try {
 $keepWhole = ['settings'];
 $prune     = ['profiles', 'biometric_credentials'];
 $wipe = [
-    'account_ledger', 'chit_groups', 'chit_members', 'chit_passbook',
-    'chit_payments', 'chit_schedules', 'collections', 'customers',
-    'fund_payments', 'funds', 'handovers', 'loans', 'notifications',
+    'account_ledger', 'chit_auctions', 'chit_groups', 'chit_members',
+    'chit_passbook', 'chit_payments', 'chit_schedules', 'collections', 'customers',
+    'fund_payments', 'fund_payouts', 'funds', 'handovers', 'loans', 'notifications',
     'promo_popups', 'push_subscriptions', 'recycle_bin', 'repayment_schedule',
 ];
 

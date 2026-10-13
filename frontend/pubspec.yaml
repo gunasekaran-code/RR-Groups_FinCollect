@@ -1,9 +1,7 @@
 name: fincollect
 description: FinCollect — Loan & Collection management app (Flutter frontend).
 publish_to: 'none'
-version: 1.0.0+3
-
-# new version version: 1.0.0+3
+version: 1.0.0+13
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -14,17 +12,23 @@ dependencies:
   flutter_localizations:
     sdk: flutter
   
-  # Set to 'any' to avoid SDK version conflicts
   intl: any
   
   cupertino_icons: ^1.0.8
   image_picker: ^1.1.2
   http: ^1.2.2
+  flutter_secure_storage: ^9.2.4
   shared_preferences: ^2.5.5
   geolocator: ^13.0.1
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
   url_launcher: ^6.3.1
+  upgrader: ^13.7.0
+  gal: ^2.3.3
+  image: ^4.10.1
+  web: ^1.1.1
+  path_provider: ^2.1.6
+  connectivity_plus: ^7.3.2
 
 dev_dependencies:
   flutter_test:
@@ -36,20 +40,25 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   
-  # Code generation is correctly turned on
   generate: true
   
   assets:
     - assets/images/logo.png
+    - assets/images/logo-splash.png
+    - assets/images/logo_app_icon.png
+    - assets/images/no_internet_illustration.png
+    - assets/images/no_internet_tower.png
 
 flutter_launcher_icons:
   android: "launcher_icon"
   ios: true
-  # A 1024×1024, opaque white-canvas app-icon version of logo.png. Its margin
-  # keeps every part of the crest inside Android's adaptive-icon safe area.
   image_path: "assets/images/logo_app_icon.png"
-  # Android 8+ uses an adaptive icon. Keep its transparent area white instead
-  # of the default black and use the entire supplied logo as the foreground.
+  remove_alpha_ios: true
   adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "assets/images/logo_app_icon.png"
+  adaptive_icon_foreground: "assets/images/logo_app_icon_foreground.png"
   min_sdk_android: 21
+  web:
+    generate: true
+    image_path: "assets/images/logo_app_icon.png"
+    background_color: "#FFFFFF"
+    theme_color: "#FFFFFF"

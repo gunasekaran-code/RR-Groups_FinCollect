@@ -7,6 +7,7 @@ import '../../services/agent_status_api_service.dart';
 import '../../services/auth_api_service.dart' show ApiException;
 import '../../widgets/app_shell.dart';
 import '../../models/agent_portfolio_model.dart';
+import '../../widgets/responsive_stat_grid.dart';
 
 // -----------------------------------------------------------------------------
 // PAGE IMPLEMENTATION
@@ -302,53 +303,42 @@ class _AgentCollectionStatusPageState extends State<AgentCollectionStatusPage> {
   }
 
   Widget _buildStatsGrid(AgentPortfolioSummary summary) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isNarrow = constraints.maxWidth < 600;
-        return GridView.count(
-          crossAxisCount: isNarrow ? 2 : 4,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: isNarrow ? 1.4 : 1.8,
-          children: [
-            _DashboardStatCard(
-              icon: Icons.people_outline,
-              iconColor: AppColors.kGold,
-              iconBg: AppColors.gold50,
-              label: 'CUSTOMERS',
-              value: '${summary.customers}',
-              subtitle:
-                  '${summary.loanCount} loans · ${summary.chitCount} chits · ${summary.fundCount} funds',
-            ),
-            _DashboardStatCard(
-              icon: Icons.check_circle_outline,
-              iconColor: AppColors.emerald,
-              iconBg: const Color(0xFFECFDF5),
-              label: 'PAID TODAY',
-              value: '${summary.collectedCount}',
-              subtitle: '${summary.pendingToday} still to collect',
-            ),
-            _DashboardStatCard(
-              icon: Icons.warning_amber_rounded,
-              iconColor: AppColors.rose,
-              iconBg: const Color(0xFFFFF1F2),
-              label: 'OVERDUE',
-              value: '${summary.overdueCount}',
-              subtitle: _formatCurrency(summary.overdueAmount),
-            ),
-            _DashboardStatCard(
-              icon: Icons.account_balance_wallet_outlined,
-              iconColor: AppColors.violet,
-              iconBg: const Color(0xFFF5F3FF),
-              label: 'OUTSTANDING',
-              value: _formatCurrency(summary.outstanding),
-              subtitle: '${_formatCurrency(summary.fundBalance)} still to save in funds',
-            ),
-          ],
-        );
-      },
+    return ResponsiveStatGrid(
+      children: [
+        _DashboardStatCard(
+          icon: Icons.people_outline,
+          iconColor: AppColors.kGold,
+          iconBg: AppColors.gold50,
+          label: 'CUSTOMERS',
+          value: '${summary.customers}',
+          subtitle:
+              '${summary.loanCount} loans · ${summary.chitCount} chits · ${summary.fundCount} funds',
+        ),
+        _DashboardStatCard(
+          icon: Icons.check_circle_outline,
+          iconColor: AppColors.emerald,
+          iconBg: const Color(0xFFECFDF5),
+          label: 'PAID TODAY',
+          value: '${summary.collectedCount}',
+          subtitle: '${summary.pendingToday} still to collect',
+        ),
+        _DashboardStatCard(
+          icon: Icons.warning_amber_rounded,
+          iconColor: AppColors.rose,
+          iconBg: const Color(0xFFFFF1F2),
+          label: 'OVERDUE',
+          value: '${summary.overdueCount}',
+          subtitle: _formatCurrency(summary.overdueAmount),
+        ),
+        _DashboardStatCard(
+          icon: Icons.account_balance_wallet_outlined,
+          iconColor: AppColors.violet,
+          iconBg: const Color(0xFFF5F3FF),
+          label: 'OUTSTANDING',
+          value: _formatCurrency(summary.outstanding),
+          subtitle: '${_formatCurrency(summary.fundBalance)} still to save in funds',
+        ),
+      ],
     );
   }
 

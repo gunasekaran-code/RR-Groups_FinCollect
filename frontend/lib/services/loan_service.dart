@@ -99,13 +99,14 @@ class LoanService {
   }
 
   Future<Map<String, List<RepaymentInstallment>>> fetchRepaymentSchedulesForLoans(
-    List<String> loanIds,
-  ) async {
+    List<String> loanIds, {
+    bool forceRefresh = false,
+  }) async {
     final ids = loanIds.where((id) => id.trim().isNotEmpty).toSet().toList();
     if (ids.isEmpty) return {};
 
     final cacheKey = ids.join(',');
-    if (_scheduleCache.containsKey(cacheKey)) {
+    if (!forceRefresh && _scheduleCache.containsKey(cacheKey)) {
       final cached = _scheduleCache[cacheKey]!;
       return <String, List<RepaymentInstallment>>{
         for (final entry in cached.entries)

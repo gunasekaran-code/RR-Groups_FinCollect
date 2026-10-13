@@ -11,6 +11,7 @@ import '../../services/session_service.dart';
 import '../Promotional Popup/promotional_popup.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/app_shell.dart';
+import '../../widgets/responsive_stat_grid.dart';
 
 String _formatIndianCurrency(double? amount) {
   if (amount == null) return '₹0';
@@ -30,17 +31,31 @@ class AgentDashboardData {
   final List<RouteStop> todayRoute;
 }
 
+/// The four stat cards, worked out exactly as the web agent dashboard does.
 class AgentSummary {
   AgentSummary({
-    required this.todayCustomers,
+    required this.toCollectToday,
+    required this.customersToCollect,
     required this.pending,
+    required this.arrears,
     required this.completed,
+    required this.visits,
     required this.collectedToday,
   });
 
-  final int todayCustomers;
+  /// Due today + overdue instalments + penalty, over every visit.
+  final double toCollectToday;
+  /// Distinct customers who still owe something today.
+  final int customersToCollect;
+  /// Visits that still owe something.
   final int pending;
+  /// Overdue instalments (before today) still unpaid.
+  final double arrears;
+  /// Visits fully settled.
   final int completed;
+  /// Every loan with something due, or something collected, today.
+  final int visits;
+  /// Loans + funds + chits collected by this agent today.
   final double collectedToday;
 }
 
@@ -86,33 +101,15 @@ class AgentReportService {
       'loans',
       query: {'assigned_agent': 'eq.$agentId'},
     );
-    final collections = await ApiClient.instance.list(
-      'collections',
-      query: {'agent_id': 'eq.$agentId'},
-    );
-
-    final loanRecords = loans.map(LoanRecord.fromJson).toList();
     final today = DateTime.now();
     final todayDateKey = DateFormat('yyyy-MM-dd').format(today);
+    final summary = await _fetchSummary(agentId, todayDateKey);
+
+    final loanRecords = loans.map(LoanRecord.fromJson).toList();
 
     final activeAssigned = loanRecords
         .where((loan) => loan.outstandingBalance > 0)
         .toList();
-
-    final todayCollectionRows = collections.where((row) {
-      final rawDate = row['collection_date'] ?? row['created_at'] ?? row['createdAt'];
-      if (rawDate == null) return false;
-      final dateText = rawDate.toString();
-      if (dateText.length >= 10) {
-        return dateText.substring(0, 10) == todayDateKey;
-      }
-      return false;
-    }).toList();
-
-    final paidTodayLoanIds = todayCollectionRows
-        .map((row) => (row['loan_id'] ?? row['loanId'])?.toString())
-        .where((id) => id != null && id.isNotEmpty)
-        .toSet();
 
     final routeStops = activeAssigned
         .take(10)
@@ -130,25 +127,129 @@ class AgentReportService {
         )
         .toList();
 
-    final collectedToday = todayCollectionRows.fold<double>(
-      0,
-      (sum, row) => sum + _asDouble(row['collection_amount'] ?? row['amount']),
-    );
+    return AgentDashboardData(summary: summary, todayRoute: routeStops);
+  }
 
-    final pending = activeAssigned
-        .where((loan) => !paidTodayLoanIds.contains(loan.id))
-        .length;
-    final completed = todayCollectionRows.length;
-    final todayCustomers = activeAssigned.length;
+  /// The stat cards, using the web agent dashboard's rules and sources so
+  /// both apps show the same figures. The backend already limits an agent
+  /// to their own loans, schedules and collections.
+  Future<AgentSummary> _fetchSummary(String agentId, String today) async {
+    Future<List<Map<String, dynamic>>> safeList(
+        String table, Map<String, String> query) async {
+      try {
+        return await ApiClient.instance.list(table, query: query);
+      } catch (_) {
+        return const [];
+      }
+    }
 
-    return AgentDashboardData(
-      summary: AgentSummary(
-        todayCustomers: todayCustomers,
-        pending: pending,
-        completed: completed,
-        collectedToday: collectedToday,
-      ),
-      todayRoute: routeStops,
+    final results = await Future.wait([
+      safeList('loans', {'status': 'in.(active,overdue)'}),
+      safeList('repayment_schedule',
+          {'status': 'neq.paid', 'due_date': 'lte.$today'}),
+      safeList('collections', {'collection_date': 'eq.$today'}),
+      safeList('fund_payments',
+          {'agent_id': 'eq.$agentId', 'payment_date': 'eq.$today'}),
+      safeList('account_ledger', {
+        'category': 'eq.Chit Collection',
+        'agent_id': 'eq.$agentId',
+        'entry_date': 'eq.$today',
+      }),
+    ]);
+    final loans = results[0];
+    final schedules = results[1];
+    final collections = results[2];
+    final fundPayments = results[3];
+    final chitReceipts = results[4];
+
+    String day(dynamic v) {
+      final t = v?.toString() ?? '';
+      return t.length >= 10 ? t.substring(0, 10) : t;
+    }
+
+    double r2(double n) => (n * 100).roundToDouble() / 100;
+
+    // Unpaid instalments per loan.
+    final rowsByLoan = <String, List<Map<String, dynamic>>>{};
+    for (final row in schedules) {
+      final loanId = row['loan_id']?.toString() ?? '';
+      final paid = row['status']?.toString() == 'paid' ||
+          _asDouble(row['balance']) <= 0;
+      if (loanId.isEmpty || paid) continue;
+      rowsByLoan.putIfAbsent(loanId, () => []).add(row);
+    }
+
+    // Money taken today per loan.
+    final collectedByLoan = <String, double>{};
+    for (final c in collections) {
+      final loanId = c['loan_id']?.toString() ?? '';
+      if (loanId.isEmpty || day(c['collection_date']) != today) continue;
+      collectedByLoan[loanId] =
+          (collectedByLoan[loanId] ?? 0) + _asDouble(c['collection_amount']);
+    }
+
+    var toCollect = 0.0;
+    var arrears = 0.0;
+    var pending = 0;
+    var settled = 0;
+    var visits = 0;
+    final owingCustomers = <String>{};
+
+    for (final loan in loans) {
+      final status = loan['status']?.toString();
+      if (status != 'active' && status != 'overdue') continue;
+      final loanId = loan['id']?.toString() ?? '';
+
+      var dueToday = 0.0;
+      var overdue = 0.0;
+      var rowPenalty = 0.0;
+      for (final row in rowsByLoan[loanId] ?? const <Map<String, dynamic>>[]) {
+        final due = day(row['due_date']);
+        if (due.isEmpty || due.compareTo(today) > 0) continue;
+        rowPenalty += _asDouble(row['penalty_amount']);
+        if (due == today) {
+          dueToday += _asDouble(row['balance']);
+        } else {
+          overdue += _asDouble(row['balance']);
+        }
+      }
+      final loanPenalty = _asDouble(loan['penalty_amount']);
+      final penalty = loanPenalty != 0 ? loanPenalty : rowPenalty;
+      final remaining = r2(dueToday + overdue + penalty);
+      final collectedToday = r2(collectedByLoan[loanId] ?? 0);
+      if (remaining <= 0 && collectedToday <= 0) continue;
+
+      visits++;
+      toCollect += remaining;
+      arrears += r2(overdue);
+      if (remaining <= 0) {
+        settled++;
+      } else {
+        pending++;
+        final customerId = loan['customer_id']?.toString();
+        owingCustomers.add(customerId != null && customerId.isNotEmpty
+            ? customerId
+            : 'loan:$loanId');
+      }
+    }
+
+    double sumOf(List<Map<String, dynamic>> rows, String column) =>
+        rows.fold<double>(0, (sum, row) => sum + _asDouble(row[column]));
+    final loanCollected = sumOf(
+        collections.where((c) => c['agent_id']?.toString() == agentId).toList(),
+        'collection_amount');
+    final collectedToday = loanCollected +
+        sumOf(fundPayments, 'amount') +
+        sumOf(chitReceipts, 'amount');
+
+    return AgentSummary(
+      toCollectToday: r2(toCollect),
+      customersToCollect: owingCustomers.length,
+      pending: pending,
+      arrears: r2(arrears),
+      completed: settled,
+      visits: visits,
+      collectedToday: collectedToday,
     );
   }
 }
@@ -473,23 +574,27 @@ class _AgentDashboardScreenState extends State<AgentDashboardScreen> {
   Widget _buildStatGrid(AgentSummary summary) {
     final stats = [
       _AgentStat(
-          'TODAY\'S CUSTOMERS',
-          '${summary.todayCustomers}',
-          'assigned visits',
+          'TO COLLECT TODAY',
+          _formatIndianCurrency(summary.toCollectToday),
+          summary.customersToCollect == 0
+              ? 'nothing due'
+              : '${summary.customersToCollect} customer${summary.customersToCollect == 1 ? '' : 's'}',
           Icons.group_outlined,
           const Color(0xFFFEF3C7),
           AppColors.kGoldDark),
       _AgentStat(
           'PENDING',
           '${summary.pending}',
-          'awaiting collection',
+          summary.arrears > 0
+              ? '${_formatIndianCurrency(summary.arrears)} in arrears'
+              : 'awaiting collection',
           Icons.access_time_rounded,
           const Color(0xFFFEF3C7),
           AppColors.kWarning),
       _AgentStat(
           'COMPLETED',
           '${summary.completed}',
-          'collected today',
+          'of ${summary.visits} visit${summary.visits == 1 ? '' : 's'}',
           Icons.check_circle_outline,
           const Color(0xFFDCFCE7),
           AppColors.kSuccess),
@@ -502,13 +607,7 @@ class _AgentDashboardScreenState extends State<AgentDashboardScreen> {
           const Color(0xFF7C3AED)),
     ];
 
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
-      childAspectRatio: 1.35,
+    return ResponsiveStatGrid(
       children: stats.map((s) => _statTile(s)).toList(),
     );
   }

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../routes/app_routes.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/app_shell.dart';
+import '../../theme/confirm_dialog.dart';
+import '../../services/NotificationService.dart';
 
 class ContactSupportScreen extends StatefulWidget {
   const ContactSupportScreen({super.key});
@@ -15,6 +18,10 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
   final _subjectCtrl = TextEditingController();
   final _messageCtrl = TextEditingController();
   String _selectedCategory = 'General Inquiry';
+  bool _submitting = false;
+
+  final String _supportPhone = '8825829445';
+  final String _supportEmail = 'ramragul197@gmail.com';
 
   final List<String> _categories = [
     'General Inquiry',
@@ -31,15 +38,119 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
     super.dispose();
   }
 
-  void _submitForm() {
-    if (_formKey.currentState?.validate() ?? false) {
+  Future<void> _submitForm() async {
+    if (_submitting) return;
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    setState(() => _submitting = true);
+    try {
+      // Lands in every admin's notifications screen.
+      await NotificationService.sendSupportRequest(
+        category: _selectedCategory,
+        subject: _subjectCtrl.text.trim(),
+        message: _messageCtrl.text.trim(),
+      );
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Support ticket submitted successfully!'),
+          content: Text('Support ticket sent to the admin team!'),
           backgroundColor: AppColors.kGold,
         ),
       );
       Navigator.of(context).pop();
+    } on NotificationApiException catch (e) {
+      // Customer logins are not allowed to write a notification, so their
+      // ticket reaches support by email instead.
+      if (e.statusCode == 403 && await _sendByEmailInstead()) return;
+      _showSendError(e.message);
+    } catch (e) {
+      _showSendError(e.toString());
+    }
+  }
+
+  /// Hands the filled-in form to the device's mail app, pre-addressed to
+  /// support. Returns false if no mail app could be opened.
+  Future<bool> _sendByEmailInstead() async {
+    final launchUri = Uri(
+      scheme: 'mailto',
+      path: _supportEmail,
+      query: [
+        'subject=${Uri.encodeComponent('[$_selectedCategory] ${_subjectCtrl.text.trim()}')}',
+        'body=${Uri.encodeComponent(_messageCtrl.text.trim())}',
+      ].join('&'),
+    );
+
+    try {
+      if (!await launchUrl(launchUri)) return false;
+    } catch (_) {
+      return false;
+    }
+
+    if (!mounted) return true;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Opening your email app to send this to support…'),
+        backgroundColor: AppColors.kGold,
+      ),
+    );
+    Navigator.of(context).pop();
+    return true;
+  }
+
+  void _showSendError(String message) {
+    if (!mounted) return;
+    setState(() => _submitting = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Could not send your message: $message'),
+        backgroundColor: AppColors.kDanger,
+      ),
+    );
+  }
+
+  Future<void> _handlePhoneTap() async {
+    final confirm = await AppConfirmDialog.show(
+      context: context,
+      title: 'Call Support',
+      message: 'Do you want to dial +91 $_supportPhone?',
+      confirmLabel: 'Call',
+      confirmButtonColor: const Color(0xFF4CAF50),
+    );
+
+    if (confirm == true) {
+      final Uri launchUri = Uri(scheme: 'tel', path: _supportPhone);
+      if (await canLaunchUrl(launchUri)) {
+        await launchUrl(launchUri);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not launch dialer')),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _handleEmailTap() async {
+    final confirm = await AppConfirmDialog.show(
+      context: context,
+      title: 'Email Support',
+      message: 'Do you want to send an email to $_supportEmail?',
+      confirmLabel: 'Email',
+      confirmButtonColor: const Color(0xFF2196F3),
+    );
+
+    if (confirm == true) {
+      final Uri launchUri = Uri(scheme: 'mailto', path: _supportEmail);
+      if (await canLaunchUrl(launchUri)) {
+        await launchUrl(launchUri);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not launch email app')),
+          );
+        }
+      }
     }
   }
 
@@ -48,12 +159,11 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
     return AppShell(
       currentRoute: AppRoutes.profile,
       title: 'Contact Support',
-      showBackButton: true, // Handled by AppShell Top Bar
+      showBackButton: true,
       body: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
         physics: const BouncingScrollPhysics(),
         children: [
-          // Header titles inside body
           const Padding(
             padding: EdgeInsets.only(left: 4, bottom: 2),
             child: Text(
@@ -98,9 +208,9 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
                   child: _buildContactTile(
                     icon: Icons.phone_in_talk_rounded,
                     title: 'Call Us',
-                    subtitle: '+91 98765 43210',
+                    subtitle: '+91 $_supportPhone',
                     color: const Color(0xFF4CAF50),
-                    onTap: () {},
+                    onTap: _handlePhoneTap,
                   ),
                 ),
                 Container(
@@ -112,9 +222,9 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
                   child: _buildContactTile(
                     icon: Icons.email_rounded,
                     title: 'Email',
-                    subtitle: 'support@rrgroups.in',
+                    subtitle: _supportEmail,
                     color: const Color(0xFF2196F3),
-                    onTap: () {},
+                    onTap: _handleEmailTap,
                   ),
                 ),
               ],
@@ -244,22 +354,35 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
                     width: double.infinity,
                     height: 48,
                     child: ElevatedButton(
-                      onPressed: _submitForm,
+                      onPressed: _submitting ? null : _submitForm,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.kGold,
                         foregroundColor: Colors.white,
+                        disabledBackgroundColor:
+                            AppColors.kGold.withOpacity(0.6),
+                        disabledForegroundColor: Colors.white,
                         elevation: 0,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
                       ),
-                      child: const Text(
-                        'Submit Ticket',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
+                      child: _submitting
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor:
+                                    AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            )
+                          : const Text(
+                              'Submit Ticket',
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                     ),
                   ),
                 ],
@@ -305,6 +428,7 @@ class _ContactSupportScreenState extends State<ContactSupportScreen> {
             const SizedBox(height: 2),
             Text(
               subtitle,
+              textAlign: TextAlign.center,
               style: const TextStyle(
                 fontSize: 11,
                 color: AppColors.kTextMuted,

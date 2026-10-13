@@ -45,6 +45,15 @@ class LoanController extends ResourceController
             $this->fillLoanNumbers();
         }
 
+        // The HP number is typed by hand now — it auto-fills, but the admin can
+        // change it, because the book they are copying from does not always
+        // agree with what the next number would have been. So the uniqueness
+        // that used to come free from a read-only field has to be enforced
+        // here. The UI checks as you type; this is the rule.
+        if (in_array($method, ['POST', 'PATCH', 'PUT'], true)) {
+            $this->rejectDuplicateNumbers($method);
+        }
+
         // An agent may only ever assign a loan to themselves. The UI hides the
         // dropdown for them, but that is cosmetic — this is the actual rule.
         if ($role === 'agent' && in_array($method, ['POST', 'PATCH', 'PUT'], true)) {
@@ -159,4 +168,55 @@ class LoanController extends ResourceController
             set_json_body($isList ? $rows : $rows[0]);
         }
     }
-}
+
+    /**
+     * Refuse a loan number that is already in use.
+     *
+     * There is no unique index on `loans.loan_number` to lean on — adding one
+     * would fail against rows that already share a number — so the check is
+     * a query. Soft-deleted loans are excluded on purpose: a number freed by
+     * deleting a loan is free to use again, and the recycle bin restoring one
+     * is a separate problem from an admin typing a number today.
+     *
+     * On a PATCH the loan being edited is excluded from the comparison, or
+     * saving a loan without touching its number would reject itself.
+     */
+    private function rejectDuplicateNumbers(string $method): void
+    {
+        $body = $this->body();
+        $isList = $body !== [] && array_keys($body) === range(0, count($body) - 1);
+        $rows = $isList ? $body : [$body];
+
+        $pdo = Database::pdo();
+        $seen = [];
+
+        foreach ($rows as $row) {
+            if (!is_array($row)) continue;
+            if (!array_key_exists('loan_number', $row)) continue;   // not being changed
+            $number = trim((string)$row['loan_number']);
+            if ($number === '') json_error('A loan needs an HP number.', 422);
+
+            // Two rows of one bulk POST claiming the same number.
+            $key = mb_strtolower($number);
+            if (isset($seen[$key])) {
+                json_error("HP number $number is used twice in the same request.", 422);
+            }
+            $seen[$key] = true;
+
+            $sql = 'SELECT `id` FROM `loans` WHERE `loan_number` = ? AND `delflag` = 0';
+            $binds = [$number];
+
+            // An edit must not collide with itself.
+            if ($method !== 'POST') {
+                $selfId = $row['id'] ?? ($_GET['id'] ?? null);
+                if (is_string($selfId) && str_starts_with($selfId, 'eq.')) $selfId = substr($selfId, 3);
+                if ($selfId) { $sql .= ' AND `id` <> ?'; $binds[] = $selfId; }
+            }
+
+            $stmt = $pdo->prepare($sql . ' LIMIT 1');
+            $stmt->execute($binds);
+            if ($stmt->fetchColumn()) {
+                json_error("HP number $number is already used by another loan.", 409);
+            }
+        }
+    }}

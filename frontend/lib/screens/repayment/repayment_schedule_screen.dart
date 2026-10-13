@@ -11,8 +11,10 @@ import '../../models/user_role.dart';
 import '../../services/api_service_repayment.dart';
 import '../../services/loan_service.dart';
 import '../../services/session_service.dart';
+import 'repayment_close_screen.dart';
 import '../../l10n/generated/app_localizations.dart';
 import '../loans/loans_screen.dart' show friendlyCollectionTypeLabel;
+import '../../widgets/responsive_stat_grid.dart';
 
 class RepaymentScheduleScreen extends StatefulWidget {
   const RepaymentScheduleScreen({super.key});
@@ -37,6 +39,31 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
   List<RepaymentInstallment> _installments = [];
   List<Customer> _customers = [];
 
+  // Loan picker search: customer name, loan number or agent.
+  final TextEditingController _loanSearchController = TextEditingController();
+  String _loanQuery = '';
+
+  List<LoanRecord> get _matchingLoans {
+    final q = _loanQuery.trim().toLowerCase();
+    if (q.isEmpty) return const [];
+    return _loanOptions.where((loan) {
+      return loan.loanNumber.toLowerCase().contains(q) ||
+          _customerLabelFor(loan).toLowerCase().contains(q) ||
+          loan.customerName.toLowerCase().contains(q) ||
+          loan.agentName.toLowerCase().contains(q);
+    }).toList();
+  }
+
+  void _selectLoan(LoanRecord loan, AppLocalizations l10n) {
+    setState(() => _selectedLoan = loan);
+    ToastService.show(
+      title: l10n.repaymentLoanSwitchedTitle,
+      message: loan.loanNumber,
+      type: ToastType.info,
+    );
+    _loadSchedule();
+  }
+
   /// The customer's full name for a loan.
   ///
   /// `LoanRecord.customerName` is only as good as the `customer_name` value
@@ -50,7 +77,8 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
     if (id != null && id.isNotEmpty) {
       for (final c in _customers) {
         if (c.id == id) {
-          if (c.fullName.isNotEmpty && c.fullName != 'Unnamed') return c.fullName;
+          if (c.fullName.isNotEmpty && c.fullName != 'Unnamed')
+            return c.fullName;
           break;
         }
       }
@@ -64,6 +92,12 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _loadLoans();
     });
+  }
+
+  @override
+  void dispose() {
+    _loanSearchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadLoans() async {
@@ -137,8 +171,8 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
       _error = null;
     });
     try {
-      final data = await ApiServiceRepayment.instance
-          .fetchSchedule(_selectedLoan!.id);
+      final data =
+          await ApiServiceRepayment.instance.fetchSchedule(_selectedLoan!.id);
       if (!mounted) return;
       setState(() {
         _installments = data;
@@ -173,8 +207,7 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
   /// "next due" row and to default-select an installment when recording
   /// a new collection.
   List<RepaymentInstallment> get _unpaidInstallments {
-    final unpaid =
-        _installments.where((i) => i.status != 'paid').toList();
+    final unpaid = _installments.where((i) => i.status != 'paid').toList();
     unpaid.sort((a, b) {
       final ad = a.dueDate;
       final bd = b.dueDate;
@@ -191,6 +224,19 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
   // Collections screen instead.
   void _goToCollections() {
     Navigator.of(context).pushNamed(AppRoutes.collections);
+  }
+
+  Future<void> _openCloseLoan() async {
+    final loan = _selectedLoan;
+    if (loan == null) return;
+    final closed = await RepaymentCloseScreen.show(
+      context,
+      loan: loan,
+      customerName: _customerLabelFor(loan),
+      installments: _installments,
+    );
+    if (closed == true && mounted)
+      _loadLoans(); // closed loan drops out of the picker
   }
 
   @override
@@ -266,12 +312,27 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
   // may write collections (the backend rejects a customer's POST with a
   // 403), so the button is hidden for customer accounts rather than shown
   // and left to fail.
-  Widget _buildHeader(BuildContext context, bool isNarrow, AppLocalizations l10n) {
+  Widget _buildHeader(
+      BuildContext context, bool isNarrow, AppLocalizations l10n) {
     final subtitle = Text(
       l10n.repaymentSubtitle,
-      style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 14),
+      style: TextStyle(
+          color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 14),
     );
-
+    final closeButton = (_isCustomer || _selectedLoan == null)
+        ? null
+        : OutlinedButton.icon(
+            onPressed: _openCloseLoan,
+            icon: const Icon(Icons.lock_outline, size: 20),
+            label: const Text('Close Loan / கடனை முடி'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.kGoldDark,
+              side: const BorderSide(color: AppColors.kGold),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+          );
     final recordButton = _isCustomer
         ? null
         : ElevatedButton.icon(
@@ -284,8 +345,8 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
               disabledBackgroundColor: AppColors.kGold.withOpacity(0.4),
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
               elevation: 0,
-              shape:
-                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
             ),
           );
 
@@ -298,6 +359,10 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
             const SizedBox(height: 16),
             SizedBox(width: double.infinity, child: recordButton),
           ],
+          if (closeButton != null) ...[
+            const SizedBox(height: 12),
+            SizedBox(width: double.infinity, child: closeButton),
+          ],
         ],
       );
     }
@@ -306,77 +371,125 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(child: subtitle),
+        if (closeButton != null) ...[
+          closeButton,
+          const SizedBox(width: 12),
+        ],
         if (recordButton != null) recordButton,
       ],
     );
   }
 
-  // Loan selector card
+  // Loan selector card — gold header strip over the picker, matching the
+  // loan cards.
   Widget _buildLoanSelector(AppLocalizations l10n) {
-    if (_isCustomer) {
-      final selected = _selectedLoan;
-      return Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppColors.kSurface,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: AppColors.kBorder),
-        ),
-        child: Row(
+    final selected = _selectedLoan;
+
+    Widget frame({required Widget header, Widget? body}) => Container(
+          decoration: BoxDecoration(
+            color: AppColors.kSurface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.kBorder),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.ink900.withValues(alpha: 0.05),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: _kGoldGradient,
+                  ),
+                ),
+                child: header,
+              ),
+              if (body != null)
+                Padding(padding: const EdgeInsets.all(16), child: body),
+            ],
+          ),
+        );
+
+    Widget headerRow(String label, String? value) => Row(
           children: [
-            const Icon(Icons.account_balance_wallet_outlined,
-                color: AppColors.kGold, size: 20),
-            const SizedBox(width: 10),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.kGold.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                    color: AppColors.kGoldLight.withValues(alpha: 0.5)),
+              ),
+              child: const Icon(Icons.account_balance_wallet_outlined,
+                  color: AppColors.gold200, size: 18),
+            ),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Customer Loan',
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.kTextMuted,
+                  Text(
+                    label,
+                    style: const TextStyle(
+                        fontSize: 11,
+                        color: AppColors.kTextOnDarkMuted,
                         fontWeight: FontWeight.bold,
                         letterSpacing: 0.5),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    selected == null
-                        ? 'No active loan found'
-                        : '${selected.loanNumber} • ${_customerLabelFor(selected)}',
-                    style: const TextStyle(
-                        fontSize: 14,
-                        color: AppColors.kTextDark,
-                        fontWeight: FontWeight.w600),
-                  ),
+                  if (value != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 15,
+                          color: AppColors.kTextOnDark,
+                          fontWeight: FontWeight.w700),
+                    ),
+                  ],
                 ],
               ),
             ),
           ],
+        );
+
+    if (_isCustomer) {
+      return frame(
+        header: headerRow(
+          'Customer Loan',
+          selected == null
+              ? 'No active loan found'
+              : '${selected.loanNumber} • ${_customerLabelFor(selected)}',
         ),
       );
     }
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppColors.kSurface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.kBorder),
+    return frame(
+      header: headerRow(
+        l10n.repaymentSelectLoanLabel,
+        selected == null
+            ? null
+            : '${selected.loanNumber} • ${_customerLabelFor(selected)}',
       ),
-      child: Column(
+      body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            l10n.repaymentSelectLoanLabel,
-            style: const TextStyle(
-                fontSize: 12,
-                color: AppColors.kTextMuted,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.5),
-          ),
-          const SizedBox(height: 8),
+          _buildLoanSearch(l10n),
+          const SizedBox(height: 10),
           DropdownButtonFormField<LoanRecord>(
+            // Rebuilt when a loan is picked from the search results, since
+            // initialValue is only read once.
+            key: ValueKey(_selectedLoan?.id),
             initialValue: _selectedLoan,
             isExpanded: true,
             decoration: InputDecoration(
@@ -392,32 +505,128 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: AppColors.kGold, width: 1.4),
+                borderSide:
+                    const BorderSide(color: AppColors.kGold, width: 1.4),
               ),
             ),
             hint: Text(l10n.repaymentSelectLoanHint),
             items: _loanOptions
                 .map((loan) => DropdownMenuItem<LoanRecord>(
                       value: loan,
-                      child: Text('${loan.loanNumber} + ${_customerLabelFor(loan)}'),
+                      child: Text(
+                          '${loan.loanNumber} + ${_customerLabelFor(loan)}'),
                     ))
                 .toList(),
             onChanged: _loanOptions.isEmpty
                 ? null
                 : (loan) {
-                    if (loan != null) {
-                      setState(() => _selectedLoan = loan);
-                      ToastService.show(
-                        title: l10n.repaymentLoanSwitchedTitle,
-                        message: loan.loanNumber,
-                        type: ToastType.info,
-                      );
-                      _loadSchedule();
-                    }
+                    if (loan != null) _selectLoan(loan, l10n);
                   },
           ),
         ],
       ),
+    );
+  }
+
+  /// Search box above the loan dropdown. Typing lists the matching loans
+  /// (by customer name, loan number or agent); tapping one selects it.
+  Widget _buildLoanSearch(AppLocalizations l10n) {
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(10),
+      borderSide: const BorderSide(color: AppColors.kBorder),
+    );
+    final matches = _matchingLoans;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _loanSearchController,
+          enabled: _loanOptions.isNotEmpty,
+          onChanged: (v) => setState(() => _loanQuery = v),
+          decoration: InputDecoration(
+            isDense: true,
+            hintText: 'Search by name, loan no, agent',
+            prefixIcon: const Icon(Icons.search, size: 20),
+            suffixIcon: _loanQuery.isEmpty
+                ? null
+                : IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () {
+                      _loanSearchController.clear();
+                      setState(() => _loanQuery = '');
+                    },
+                  ),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            border: border,
+            enabledBorder: border,
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: AppColors.kGold, width: 1.4),
+            ),
+          ),
+        ),
+        if (_loanQuery.trim().isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Container(
+            constraints: const BoxConstraints(maxHeight: 260),
+            decoration: BoxDecoration(
+              color: AppColors.kSurface,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: AppColors.kBorder),
+            ),
+            child: matches.isEmpty
+                ? const Padding(
+                    padding: EdgeInsets.all(14),
+                    child: Text(
+                      'No matching loans',
+                      style:
+                          TextStyle(fontSize: 13, color: AppColors.kTextMuted),
+                    ),
+                  )
+                : ListView.separated(
+                    shrinkWrap: true,
+                    padding: EdgeInsets.zero,
+                    itemCount: matches.length,
+                    separatorBuilder: (_, __) =>
+                        const Divider(height: 1, color: AppColors.kBorder),
+                    itemBuilder: (context, i) {
+                      final loan = matches[i];
+                      final isSelected = loan.id == _selectedLoan?.id;
+                      return ListTile(
+                        dense: true,
+                        selected: isSelected,
+                        selectedTileColor:
+                            AppColors.kGold.withValues(alpha: 0.08),
+                        title: Text(
+                          '${loan.loanNumber} • ${_customerLabelFor(loan)}',
+                          style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.kTextDark),
+                        ),
+                        subtitle: Text(
+                          'Agent: ${loan.agentName}',
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.kTextMuted),
+                        ),
+                        trailing: isSelected
+                            ? const Icon(Icons.check,
+                                size: 18, color: AppColors.kGold)
+                            : null,
+                        onTap: () {
+                          FocusScope.of(context).unfocus();
+                          _loanSearchController.clear();
+                          setState(() => _loanQuery = '');
+                          if (!isSelected) _selectLoan(loan, l10n);
+                        },
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -477,9 +686,12 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppColors.kWarning.withOpacity(0.10),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFA9791F), Color(0xFFC48E28)],
+        ),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.kWarning.withOpacity(0.35)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -487,7 +699,8 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.bolt_rounded, color: AppColors.kWarning, size: 20),
+              const Icon(Icons.bolt_rounded,
+                  color: AppColors.gold200, size: 20),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
@@ -498,7 +711,7 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 13.5,
-                        color: AppColors.kTextDark,
+                        color: AppColors.kTextOnDark,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -507,7 +720,7 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
                       style: const TextStyle(
                         fontSize: 12.5,
                         height: 1.4,
-                        color: AppColors.kTextDark,
+                        color: AppColors.kTextOnDark,
                       ),
                     ),
                   ],
@@ -520,7 +733,7 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
-                color: AppColors.kDanger.withOpacity(0.12),
+                color: AppColors.kSurface,
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
@@ -543,15 +756,12 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
   // All figures below are derived from the fetched schedule rows.
   Widget _buildSummaryGrid(bool isNarrow, AppLocalizations l10n) {
     final total = _installments.length;
-    final paidCount =
-        _installments.where((i) => i.status == 'paid').length;
+    final paidCount = _installments.where((i) => i.status == 'paid').length;
     final overdueCount =
         _installments.where((i) => i.status == 'overdue').length;
     final pendingCount = total - paidCount - overdueCount;
 
-    final emi = _installments.isNotEmpty
-        ? _installments.first.emiAmount
-        : 0.0;
+    final emi = _installments.isNotEmpty ? _installments.first.emiAmount : 0.0;
     final totalRepayment =
         _installments.fold<double>(0, (sum, i) => sum + i.emiAmount);
     final outstanding =
@@ -566,15 +776,29 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
 
     String fmt(double v) => LoanRecord.formatRupees(v);
 
+    final split = _installmentSplit(emi);
+
     final cards = <Widget>[
-      _buildStatCard(l10n.repaymentStatLoanNumber, _selectedLoan?.loanNumber ?? '-', icon: Icons.badge_outlined),
-      _buildStatCard(l10n.repaymentStatCustomer, _customerLabelFor(_selectedLoan), icon: Icons.person_outline),
-      _buildStatCard(l10n.repaymentStatLoanAmount, _selectedLoan?.formattedAmount ?? '-',
+      _buildStatCard(
+          l10n.repaymentStatLoanNumber, _selectedLoan?.loanNumber ?? '-',
+          icon: Icons.badge_outlined),
+      _buildStatCard(
+          l10n.repaymentStatCustomer, _customerLabelFor(_selectedLoan),
+          icon: Icons.person_outline),
+      _buildStatCard(
+          l10n.repaymentStatLoanAmount, _selectedLoan?.formattedAmount ?? '-',
           icon: Icons.account_balance_wallet_outlined),
-      _buildStatCard(l10n.repaymentStatEmi, fmt(emi), icon: Icons.calendar_month_outlined),
+      _buildStatCard(l10n.repaymentStatEmi, fmt(split.principal),
+          icon: Icons.calendar_month_outlined),
+      _buildStatCard('INTEREST', fmt(split.interest),
+          icon: Icons.percent,
+          textColor: AppColors.kWarning,
+          borderColor: AppColors.kWarning.withOpacity(0.3),
+          bgColor: AppColors.kWarning.withOpacity(0.05)),
       _buildStatCard(l10n.repaymentStatTotalRepayment, fmt(totalRepayment),
           icon: Icons.summarize_outlined),
-      _buildStatCard(l10n.repaymentStatTotalDuePenalty, fmt(totalDueWithPenalty),
+      _buildStatCard(
+          l10n.repaymentStatTotalDuePenalty, fmt(totalDueWithPenalty),
           icon: Icons.account_balance, textColor: AppColors.kDanger),
       _buildStatCard(l10n.repaymentStatTotalInstallments, '$total',
           icon: Icons.format_list_numbered),
@@ -600,14 +824,139 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
           bgColor: AppColors.kGold.withOpacity(0.08)),
     ];
 
-    return GridView.count(
-      crossAxisCount: isNarrow ? 2 : 4,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
-      childAspectRatio: isNarrow ? 1.5 : 1.7,
-      children: cards,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ResponsiveStatGrid(
+          children: cards,
+        ),
+        const SizedBox(height: 12),
+        _buildInstallmentTotalCard(split, fmt, l10n),
+      ],
+    );
+  }
+
+  /// Splits one installment into its principal and interest parts, from the
+  /// loan's own figures (loan_amount, interest_percentage, loan_duration,
+  /// loan_type) — the same rules the backend's Loan::deriveTotals uses:
+  ///
+  ///   - Monthly EMI:      interest = principal × rate% each month,
+  ///                       principal part = installment − interest
+  ///                       (₹60,000 @ 3% × 12 → ₹5,000 + ₹1,800 = ₹6,800).
+  ///   - Monthly Interest: the installment is all interest.
+  ///   - Daily, 60 days:   the interest is added on top and spread evenly.
+  ///   - Weekly / Daily 100 days: interest is deducted at disbursement, so
+  ///                       every installment is principal only.
+  ///
+  /// [scheduleEmi] is the installment amount from the fetched schedule; the
+  /// loan's stored `emi` is preferred when present.
+  ({double principal, double interest, double total}) _installmentSplit(
+      double scheduleEmi) {
+    final loan = _selectedLoan;
+    if (loan == null) return (principal: 0, interest: 0, total: scheduleEmi);
+
+    final total = loan.emiAmount > 0 ? loan.emiAmount : scheduleEmi;
+    final p = loan.principalAmount;
+    final rate = loan.interestRate;
+    final n = loan.durationUnits;
+
+    double interest;
+    switch (loan.collectionType.toLowerCase()) {
+      case 'weekly':
+        interest = 0;
+        break;
+      case 'daily':
+        final days = n > 0 ? n : 60;
+        interest = days >= 100 ? 0 : (p * rate / 100) / days;
+        break;
+      default: // monthly (EMI or interest-only) and monthly_interest
+        interest = p * rate / 100;
+    }
+
+    double r2(double v) => (v * 100).roundToDouble() / 100;
+    interest = r2(interest.clamp(0, total).toDouble());
+    final principal = r2((total - interest).clamp(0, total).toDouble());
+    return (principal: principal, interest: interest, total: total);
+  }
+
+  /// The full-width card closing the summary: EMI + Interest = installment.
+  Widget _buildInstallmentTotalCard(
+    ({double principal, double interest, double total}) split,
+    String Function(double) fmt,
+    AppLocalizations l10n,
+  ) {
+    Widget part(String label, String value) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label,
+                style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.kTextMuted,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.3)),
+            const SizedBox(height: 2),
+            Text(value,
+                style: const TextStyle(
+                    fontSize: 15,
+                    color: AppColors.kTextDark,
+                    fontWeight: FontWeight.w700)),
+          ],
+        );
+    const opStyle = TextStyle(
+        fontSize: 18, color: AppColors.kTextMuted, fontWeight: FontWeight.w600);
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.kGold.withOpacity(0.08),
+        border: Border.all(color: AppColors.kGold.withOpacity(0.35)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'TOTAL ${l10n.repaymentStatEmi} + INTEREST (PER INSTALLMENT)',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.kGoldDark.withOpacity(0.85),
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+              Icon(Icons.payments_outlined,
+                  size: 18, color: AppColors.kGoldDark.withOpacity(0.7)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            fmt(split.total),
+            style: const TextStyle(
+              fontSize: 30,
+              color: AppColors.kGoldDark,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 14,
+            runSpacing: 8,
+            children: [
+              part(l10n.repaymentStatEmi, fmt(split.principal)),
+              const Text('+', style: opStyle),
+              part('INTEREST', fmt(split.interest)),
+              const Text('=', style: opStyle),
+              part('TOTAL', fmt(split.total)),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -639,8 +988,7 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
                   title,
                   style: TextStyle(
                     fontSize: 12,
-                    color:
-                        textColor?.withOpacity(0.85) ?? AppColors.kTextMuted,
+                    color: textColor?.withOpacity(0.85) ?? AppColors.kTextMuted,
                     fontWeight: FontWeight.w600,
                     letterSpacing: 0.3,
                   ),
@@ -672,9 +1020,10 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
     );
   }
 
-  // Installments table — same visual pattern as before, now sourced
-  // from live `_installments` fetched via ApiServiceRepayment, with rows
-  // tinted by status so paid / next-due / overdue installments stand out.
+  // Installment breakdown — sourced from live `_installments` fetched via
+  // ApiServiceRepayment. One gold-header table on every screen size; it
+  // scrolls sideways when narrower than its columns. Paid / next-due /
+  // overdue installments stand out.
   Widget _buildInstallmentsTable(bool isNarrow, AppLocalizations l10n) {
     if (_installments.isEmpty) {
       return Container(
@@ -683,94 +1032,253 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
         decoration: BoxDecoration(
           color: AppColors.kSurface,
           border: Border.all(color: AppColors.kBorder),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(16),
         ),
-        child: Text(
-          l10n.repaymentNoInstallmentsFound,
-          style: const TextStyle(color: AppColors.kTextMuted),
+        child: Column(
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: const BoxDecoration(
+                color: AppColors.gold50,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.receipt_long_outlined,
+                  size: 26, color: AppColors.kGold),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              l10n.repaymentNoInstallmentsFound,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  color: AppColors.kTextMuted, fontWeight: FontWeight.w600),
+            ),
+          ],
         ),
       );
     }
 
-    final nextDueId = _unpaidInstallments.isNotEmpty
-        ? _unpaidInstallments.first.id
-        : null;
+    final nextDueId =
+        _unpaidInstallments.isNotEmpty ? _unpaidInstallments.first.id : null;
 
-    Color? rowColor(RepaymentInstallment inst) {
-      if (inst.status == 'paid') return AppColors.kSuccess.withOpacity(0.07);
-      if (inst.status == 'overdue') return AppColors.kDanger.withOpacity(0.06);
-      if (inst.id == nextDueId) return AppColors.kGold.withOpacity(0.10);
-      return null;
+    return _buildInstallmentDataTable(nextDueId, l10n);
+  }
+
+  static const double _tableHeadingHeight = 50;
+
+  Widget _buildInstallmentDataTable(String? nextDueId, AppLocalizations l10n) {
+    Color rowColor(RepaymentInstallment inst, int index) {
+      if (inst.status == 'paid') {
+        return AppColors.kSuccess.withValues(alpha: 0.07);
+      }
+      if (inst.status == 'overdue') {
+        return AppColors.kDanger.withValues(alpha: 0.06);
+      }
+      if (inst.id == nextDueId) return AppColors.kGold.withValues(alpha: 0.10);
+      return index.isOdd ? AppColors.kBackground : AppColors.kSurface;
     }
 
-    final table = DataTable(
-      headingRowColor:
-          WidgetStateProperty.all(AppColors.kBackground),
-      headingTextStyle: const TextStyle(
-        color: AppColors.kTextMuted,
-        fontWeight: FontWeight.bold,
-        fontSize: 12,
-      ),
-      dataTextStyle: const TextStyle(
-        fontSize: 14,
-        color: AppColors.kTextDark,
-      ),
-      dividerThickness: 0.4,
-      columns: [
-        DataColumn(label: Text(l10n.repaymentColInstNo)),
-        DataColumn(label: Text(l10n.repaymentColDueDate)),
-        DataColumn(label: Text(l10n.repaymentColEmiAmount)),
-        DataColumn(label: Text(l10n.repaymentColPaid)),
-        DataColumn(label: Text(l10n.repaymentColBalance)),
-        DataColumn(label: Text(l10n.repaymentColPenalty)),
-        DataColumn(label: Text(l10n.repaymentColStatus)),
-      ],
-      rows: _installments.map((inst) {
-        return DataRow(
-          color: WidgetStateProperty.all(rowColor(inst)),
-          cells: [
-            DataCell(Text('#${inst.installmentNo}',
-                style: const TextStyle(fontWeight: FontWeight.w600))),
-            DataCell(Text(inst.dueDateDisplay)),
-            DataCell(Text(inst.amountDisplay)),
-            DataCell(Text(inst.paidDisplay)),
-            DataCell(Text(inst.balanceDisplay,
-                style: const TextStyle(fontWeight: FontWeight.w600))),
-            DataCell(Text(inst.penaltyDisplay,
-                style: const TextStyle(fontWeight: FontWeight.w600))),
-            DataCell(StatusBadge(
-                label: inst.statusLabel, tone: _toneFor(inst.statusLabel))),
-          ],
-        );
-      }).toList(),
-    );
-
-    return Card(
-      margin: EdgeInsets.zero,
-      color: AppColors.kSurface,
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        side: const BorderSide(color: AppColors.kBorder),
-        borderRadius: BorderRadius.circular(12),
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.kSurface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.kBorder),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.ink900.withValues(alpha: 0.05),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: Scrollbar(
-          thumbVisibility: true,
-          trackVisibility: true,
-          notificationPredicate: (notification) => notification.depth == 0,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            physics: const ClampingScrollPhysics(),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 720),
-              child: SingleChildScrollView(
-                child: table,
+        borderRadius: BorderRadius.circular(16),
+        child: LayoutBuilder(builder: (context, constraints) {
+          final table = DataTable(
+            // Transparent so the gold gradient strip painted behind it shows
+            // through.
+            headingRowColor: WidgetStateProperty.all(Colors.transparent),
+            headingRowHeight: _tableHeadingHeight,
+            dataRowMinHeight: 54,
+            dataRowMaxHeight: 58,
+            columnSpacing: 28,
+            dividerThickness: 0.6,
+            headingTextStyle: const TextStyle(
+              color: AppColors.kTextOnDark,
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
+              letterSpacing: 0.3,
+            ),
+            dataTextStyle:
+                const TextStyle(color: AppColors.kTextDark, fontSize: 13),
+            columns: [
+              DataColumn(label: Text(l10n.repaymentColInstNo)),
+              // The due-date column soaks up spare width so the table always
+              // spans the card.
+              DataColumn(
+                label: Text(l10n.repaymentColDueDate),
+                columnWidth: const MaxColumnWidth(
+                    IntrinsicColumnWidth(), FlexColumnWidth()),
+              ),
+              DataColumn(label: Text(l10n.repaymentColEmiAmount)),
+              DataColumn(label: Text(l10n.repaymentColPaid)),
+              DataColumn(label: Text(l10n.repaymentColBalance)),
+              DataColumn(label: Text(l10n.repaymentColPenalty)),
+              DataColumn(label: Text(l10n.repaymentColStatus)),
+            ],
+            rows: [
+              for (var i = 0; i < _installments.length; i++)
+                DataRow(
+                  color: WidgetStateProperty.resolveWith((states) {
+                    if (states.contains(WidgetState.hovered)) {
+                      return AppColors.gold50;
+                    }
+                    return rowColor(_installments[i], i);
+                  }),
+                  cells: _installmentCells(
+                      _installments[i], _installments[i].id == nextDueId, l10n),
+                ),
+            ],
+          );
+
+          return Scrollbar(
+            thumbVisibility: true,
+            trackVisibility: true,
+            notificationPredicate: (notification) => notification.depth == 0,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const ClampingScrollPhysics(),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                child: Stack(
+                  fit: StackFit.passthrough,
+                  children: [
+                    // DataTable can't take a gradient, so paint the header
+                    // strip (same gold as the loan cards) behind the table.
+                    const Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: _tableHeadingHeight,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                            colors: _kGoldGradient,
+                          ),
+                        ),
+                      ),
+                    ),
+                    table,
+                  ],
+                ),
               ),
             ),
-          ),
+          );
+        }),
+      ),
+    );
+  }
+
+  List<DataCell> _installmentCells(
+      RepaymentInstallment inst, bool isNextDue, AppLocalizations l10n) {
+    return [
+      DataCell(Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: AppColors.gold50,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppColors.gold200),
         ),
+        child: Text('#${inst.installmentNo}',
+            style: const TextStyle(
+                fontWeight: FontWeight.w700, color: AppColors.kGoldDark)),
+      )),
+      DataCell(Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(inst.dueDateDisplay),
+          if (isNextDue) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: AppColors.gold50,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppColors.gold300),
+              ),
+              child: Text(
+                l10n.repaymentStatNextDue,
+                style: const TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.kGoldDark,
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ),
+          ],
+        ],
+      )),
+      DataCell(Text(inst.amountDisplay)),
+      DataCell(Text(inst.paidDisplay,
+          style: TextStyle(
+              color: inst.paidAmount > 0 ? AppColors.kSuccess : null,
+              fontWeight: FontWeight.w600))),
+      DataCell(Text(inst.balanceDisplay,
+          style: const TextStyle(
+              fontWeight: FontWeight.w700, color: AppColors.kGoldDark))),
+      DataCell(Text(inst.penaltyDisplay,
+          style: TextStyle(
+              color: inst.penaltyAmount > 0 ? AppColors.kDanger : null,
+              fontWeight: FontWeight.w600))),
+      DataCell(_installmentStatusPill(inst)),
+    ];
+  }
+
+  /// Gold pill with a status-coloured dot, matching the loan status pills.
+  Widget _installmentStatusPill(RepaymentInstallment inst) {
+    final Color dot;
+    switch (_toneFor(inst.statusLabel)) {
+      case BadgeTone.success:
+        dot = AppColors.kSuccess;
+        break;
+      case BadgeTone.danger:
+        dot = AppColors.kDanger;
+        break;
+      default:
+        dot = AppColors.kWarning;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: AppColors.gold100,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.gold300),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            inst.statusLabel,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: AppColors.gold800,
+            ),
+          ),
+        ],
       ),
     );
   }
 }
+
+/// Same gold strip as the loan cards and table headers.
+const List<Color> _kGoldGradient = [Color(0xFFA9791F), Color(0xFFC48E28)];

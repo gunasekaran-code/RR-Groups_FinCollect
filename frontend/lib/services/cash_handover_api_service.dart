@@ -72,8 +72,7 @@ class CashHandoverApiService {
 
   // Same scoping rule as handovers, applied to the `collections` table —
   // an agent only ever sees what they themselves collected.
-  static Map<String, String>? _collectionsScopeQuery() =>
-      _handoverScopeQuery();
+  static Map<String, String>? _collectionsScopeQuery() => _handoverScopeQuery();
 
   static double _rowDouble(dynamic v) {
     if (v == null) return 0;
@@ -208,7 +207,9 @@ class CashHandoverApiService {
   /// agent only ever sees their own) and aggregates it into overall, method
   /// (cash vs. online) and per-agent totals in one pass.
   static Future<_CollectionTotals> _fetchCollectionTotals() async {
-    final rows = await _listCollectionRows();
+    final loanRows = await _listCollectionRows();
+    final chitRows = await _listChitPaymentRows();
+    final fundRows = await _listFundPaymentRows();
     final now = DateTime.now();
 
     double total = 0, cash = 0, online = 0;
@@ -216,12 +217,14 @@ class CashHandoverApiService {
     final byAgent = <String, double>{};
     final agentNames = <String, String>{};
 
-    for (final row in rows) {
-      final amount = _rowDouble(row['collection_amount']);
-      if (amount == 0) continue;
+    void processRow(
+        Map<String, dynamic> row, String amountKey, String dateKey) {
+      final amount = _rowDouble(row[amountKey]);
+      if (amount == 0) return;
       final isCash =
           (row['payment_method'] ?? '').toString().toLowerCase() == 'cash';
-      final date = DateTime.tryParse(row['collection_date']?.toString() ?? '');
+      final date = DateTime.tryParse(
+          row[dateKey]?.toString() ?? row['created_at']?.toString() ?? '');
       final agentId = (row['agent_id'] ?? '').toString();
 
       total += amount;
@@ -245,6 +248,16 @@ class CashHandoverApiService {
       }
     }
 
+    for (final row in loanRows) {
+      processRow(row, 'collection_amount', 'collection_date');
+    }
+    for (final row in chitRows) {
+      processRow(row, 'amount', 'payment_date');
+    }
+    for (final row in fundRows) {
+      processRow(row, 'amount', 'payment_date');
+    }
+
     return _CollectionTotals(
       total: total,
       cash: cash,
@@ -264,6 +277,82 @@ class CashHandoverApiService {
     );
     if (res.statusCode != 200) _throwFromResponse(res);
     return _decodeRows(res);
+  }
+
+  static Future<List<Map<String, dynamic>>> _listChitPaymentRows() async {
+    try {
+      final res = await http.get(
+        _uri('chit_payments', _collectionsScopeQuery()),
+        headers: _headers,
+      );
+      if (res.statusCode != 200) return [];
+      return _decodeRows(res);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// Fund deposits recorded before the Funds screen went through
+  /// `funds.php?action=collect` were written without an `agent_id`, so an
+  /// `agent_id` filter dropped them and the agent's handover never showed the
+  /// money. Such a row is attributed to the fund's assigned agent — the only
+  /// agent allowed to collect on it. The backend already scopes an agent's
+  /// read to their own funds plus their own receipts, so the rows are fetched
+  /// without the filter and narrowed to the agent here, after attribution.
+  static Future<List<Map<String, dynamic>>> _listFundPaymentRows() async {
+    try {
+      final res = await http.get(_uri('fund_payments'), headers: _headers);
+      if (res.statusCode != 200) return [];
+      var rows = _decodeRows(res);
+
+      bool missingAgent(Map<String, dynamic> row) =>
+          (row['agent_id'] ?? '').toString().trim().isEmpty;
+      if (rows.any(missingAgent)) {
+        final owners = await _fundOwners();
+        rows = rows.map((row) {
+          final owner =
+              missingAgent(row) ? owners[row['fund_id']?.toString()] : null;
+          if (owner == null) return row;
+          return {
+            ...row,
+            'agent_id': owner.id,
+            if ((row['agent_name'] ?? '').toString().trim().isEmpty)
+              'agent_name': owner.name,
+          };
+        }).toList();
+      }
+
+      if (_isAdmin) return rows;
+      final userId = _currentUserId();
+      if (userId == null) return [];
+      return rows
+          .where((row) => (row['agent_id'] ?? '').toString() == userId)
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// fund id → its assigned agent, for attributing deposits that carry no
+  /// `agent_id` of their own.
+  static Future<Map<String, HandoverAgentOption>> _fundOwners() async {
+    final res = await http.get(
+      _uri('funds', {'select': 'id,assigned_agent,agent_name'}),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) return const {};
+    final owners = <String, HandoverAgentOption>{};
+    for (final row in _decodeRows(res)) {
+      final fundId = row['id']?.toString() ?? '';
+      final agentId = row['assigned_agent']?.toString().trim() ?? '';
+      if (fundId.isEmpty || agentId.isEmpty) continue;
+      owners[fundId] = HandoverAgentOption(
+        id: agentId,
+        name: row['agent_name']?.toString() ?? '',
+        active: true,
+      );
+    }
+    return owners;
   }
 
   static Future<List<HandoverRecord>> fetchHistory({int? limit}) async {

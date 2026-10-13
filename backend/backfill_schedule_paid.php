@@ -6,6 +6,9 @@
 // Safe to re-run: it only writes rows whose paid/balance/status actually change.
 require_once __DIR__ . '/bootstrap.php';
 
+
+// Not a public URL. See require_maintenance_admin() in bootstrap.php.
+require_maintenance_admin();
 $pdo = Database::pdo();
 $today = (new DateTime())->format('Y-m-d');
 
@@ -18,9 +21,13 @@ $loansTouched = 0;
 $rowsUpdated = 0;
 
 foreach ($loanIds as $loanId) {
-    // Total collected against this loan.
+    // Total collected against this loan, net of any late fee on the same
+    // receipt. A fine is charged because a repayment was late; it is not
+    // itself a repayment, and cascading it over the schedule would credit the
+    // borrower with her own penalty.
     $stmt = $pdo->prepare(
-        "SELECT COALESCE(SUM(collection_amount),0) FROM collections WHERE loan_id = ?"
+        "SELECT COALESCE(SUM(GREATEST(collection_amount - GREATEST(COALESCE(penalty_amount, 0), 0), 0)), 0)
+           FROM collections WHERE loan_id = ?"
     );
     $stmt->execute([$loanId]);
     $remaining = (float)$stmt->fetchColumn();

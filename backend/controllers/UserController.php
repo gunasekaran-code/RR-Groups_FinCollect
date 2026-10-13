@@ -25,8 +25,35 @@ class UserController extends Controller
         }
     }
 
-    private static function clean($v): ?string
+    /**
+     * Extra contact numbers as digits separated by commas.
+     *
+     * Same rule as the customer endpoint: non-digits dropped, blanks and
+     * duplicates removed, the primary number not repeated, two at most. The
+     * column is never the one sign-in resolves, so nothing here can change who
+     * can log in.
+     */
+    private static function phoneList($v, ?string $primary = null): ?string
     {
+        if ($v === null) return null;
+        $parts = is_array($v) ? $v : explode(',', (string)$v);
+        $primaryDigits = preg_replace('/\D+/', '', (string)$primary);
+        $out = [];
+        foreach ($parts as $p) {
+            $d = preg_replace('/\D+/', '', (string)$p);
+            if ($d === '') continue;
+            if (!preg_match('/^[6-9]\d{9}$/', $d)) {
+                json_error('Each alternate number must be a valid 10-digit mobile number', 400);
+            }
+            if ($primaryDigits !== '' && $d === $primaryDigits) continue;
+            if (in_array($d, $out, true)) continue;
+            $out[] = $d;
+            if (count($out) >= 2) break;
+        }
+        return $out ? implode(',', $out) : null;
+    }
+
+    private static function clean($v): ?string    {
         $v = is_string($v) ? trim($v) : '';
         return $v === '' ? null : $v;
     }
@@ -78,6 +105,7 @@ class UserController extends Controller
             'password_hash' => password_hash($password, PASSWORD_BCRYPT),
             'full_name'     => $full_name,
             'mobile'        => self::clean($b['mobile'] ?? null),
+            'alt_mobiles'   => self::phoneList($b['alt_mobiles'] ?? null, $b['mobile'] ?? null),
             'role'          => $userRole,
             'user_code'     => $userCode,
             'customer_id'   => self::clean($b['customer_id'] ?? null),
@@ -95,7 +123,10 @@ class UserController extends Controller
     {
         $id = $_GET['id'] ?? '';
         if ($id === '') json_error('Missing user id', 400);
-        if (!Profile::findPublic($id)) json_error('User not found', 404);
+        // Kept, not discarded: an edit that changes only the extra numbers
+        // still has to know the primary one to avoid repeating it.
+        $existing = Profile::findPublic($id);
+        if (!$existing) json_error('User not found', 404);
         $b = $this->body();
 
         $data = [];
@@ -106,6 +137,13 @@ class UserController extends Controller
         }
         foreach (['mobile', 'avatar_url', 'address', 'aadhaar', 'pan', 'occupation'] as $f) {
             if (array_key_exists($f, $b)) $data[$f] = self::clean($b[$f]);
+        }
+        if (array_key_exists('alt_mobiles', $b)) {
+            // Against the number being saved when there is one, else the
+            // one already on the row, so an edit that touches only the
+            // extras still cannot duplicate the primary.
+            $primary = array_key_exists('mobile', $b) ? $b['mobile'] : ($existing['mobile'] ?? null);
+            $data['alt_mobiles'] = self::phoneList($b['alt_mobiles'], $primary);
         }
         if (array_key_exists('status', $b)) $data['status'] = $b['status'] === 'inactive' ? 'inactive' : 'active';
         if (array_key_exists('role', $b))   $data['role'] = $this->role($b['role']);

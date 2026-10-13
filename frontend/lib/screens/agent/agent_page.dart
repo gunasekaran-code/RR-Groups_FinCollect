@@ -12,6 +12,8 @@ import '../../../services/agent_api_service.dart';
 import '../../../services/auth_api_service.dart' show ApiException;
 import '../../../l10n/generated/app_localizations.dart';
 import 'agent_collection_status_page.dart';
+import '../../widgets/responsive_stat_grid.dart';
+import '../../widgets/phone_numbers_field.dart';
 
 String localizedRoleLabel(String role, AppLocalizations l10n) {
   switch (role) {
@@ -178,6 +180,7 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
       'name': row['full_name'] ?? '',
       'email': row['email'] ?? '',
       'mobile': row['mobile'] ?? '',
+      'alt_mobiles': PhoneNumbersController.parse(row['alt_mobiles']),
       'role': cap(row['role']?.toString()),
       'status': cap(row['status']?.toString()),
       'created': row['created_at'] ?? row['created'] ?? '',
@@ -196,6 +199,8 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
       'full_name': agent['name'],
       'email': agent['email'],
       'mobile': agent['mobile'],
+      'alt_mobiles': PhoneNumbersController.encode(
+          List<String>.from(agent['alt_mobiles'] ?? const [])),
       'password': agent['password'],
       'role': (agent['role'] as String).toLowerCase(),
       'status': (agent['status'] as String).toLowerCase(),
@@ -546,13 +551,7 @@ class _AgentManagementScreenState extends State<AgentManagementScreen> {
 
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
-      child: GridView.count(
-        crossAxisCount: isNarrow ? 2 : 4,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        mainAxisSpacing: 12,
-        crossAxisSpacing: isNarrow ? 12 : 16,
-        childAspectRatio: isNarrow ? 1.3 : 1.7,
+      child: ResponsiveStatGrid(
         children: cards,
       ),
     );
@@ -720,7 +719,7 @@ class _AgentFormDialogState extends State<AgentFormDialog> {
   String? _photoDataUri;
 
   late final TextEditingController _nameController;
-  late final TextEditingController _mobileController;
+  late final PhoneNumbersController _phones;
   late final TextEditingController _emailController;
   late final TextEditingController _passwordController;
   late final TextEditingController _addressController;
@@ -739,7 +738,10 @@ class _AgentFormDialogState extends State<AgentFormDialog> {
     super.initState();
     final agent = widget.agent;
     _nameController = TextEditingController(text: agent?['name'] ?? '');
-    _mobileController = TextEditingController(text: agent?['mobile'] ?? '');
+    _phones = PhoneNumbersController(
+      primary: agent?['mobile'],
+      alternates: List<String>.from(agent?['alt_mobiles'] ?? const []),
+    );
     _emailController = TextEditingController(text: agent?['email'] ?? '');
     _passwordController = TextEditingController(text: agent?['password'] ?? '');
     _addressController = TextEditingController(text: agent?['address'] ?? '');
@@ -755,7 +757,7 @@ class _AgentFormDialogState extends State<AgentFormDialog> {
   @override
   void dispose() {
     _nameController.dispose();
-    _mobileController.dispose();
+    _phones.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     _addressController.dispose();
@@ -792,12 +794,14 @@ class _AgentFormDialogState extends State<AgentFormDialog> {
       );
       return;
     }
+    if (!(_formKey.currentState?.validate() ?? false)) return;
 
     final updated = <String, dynamic>{
       ...?widget.agent,
       'id': widget.agent?['id'] ?? '',
       'name': _nameController.text.trim(),
-      'mobile': _mobileController.text.trim(),
+      'mobile': _phones.primaryNumber,
+      'alt_mobiles': _phones.alternateNumbers,
       'email': _emailController.text.trim(),
       'password': _passwordController.text,
       'role': _role,
@@ -824,7 +828,10 @@ class _AgentFormDialogState extends State<AgentFormDialog> {
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-      child: Column(
+      child: Form(
+        key: _formKey,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -875,8 +882,10 @@ class _AgentFormDialogState extends State<AgentFormDialog> {
           _buildTextField(l10n.agentFieldFullName, l10n.agentFieldFullNameHint,
               controller: _nameController),
           const SizedBox(height: 16),
-          _buildTextField(l10n.agentFieldMobile, l10n.agentFieldMobileHint,
-              controller: _mobileController),
+          PhoneNumbersField(
+            controller: _phones,
+            label: l10n.agentFieldMobile,
+          ),
           const SizedBox(height: 16),
           LayoutBuilder(
             builder: (context, constraints) {
@@ -975,6 +984,7 @@ class _AgentFormDialogState extends State<AgentFormDialog> {
             ),
           ),
         ],
+        ),
       ),
     );
   }

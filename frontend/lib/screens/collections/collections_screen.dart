@@ -7,15 +7,22 @@ import '../../widgets/page_header.dart';
 import '../../theme/glass_toast.dart';
 import '../../services/collection_api_service.dart';
 import '../../services/loan_service.dart';
+import '../../services/agent_collection_api_service.dart';
 import '../../models/customer.dart';
 import '../../models/loan_record.dart';
 import '../../models/repayment_installment.dart';
+import '../../models/agent_collection.dart';
 import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
 import '../../widgets/app_upload.dart';
 import '../../l10n/generated/app_localizations.dart';
 import '../loans/loans_screen.dart'
-    show localizedStatusLabel, friendlyCollectionTypeLabel, collectionTypeOptionKey;
+    show
+        localizedStatusLabel,
+        friendlyCollectionTypeLabel,
+        collectionTypeOptionKey;
+import '../../widgets/collect_payment_sheet.dart';
+import '../../widgets/responsive_stat_grid.dart';
 
 /// Maps an internal period-filter key to its localized chip label. Internal
 /// keys ('Today', 'This Week', 'This Month', 'All') stay English-constant
@@ -70,16 +77,20 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
   bool _showAll = false;
 
   final List<String> _periods = const [
-    'Today',    'This Week',    'This Month',    'All'
+    'Today',
+    'This Week',
+    'This Month',
+    'All'
   ];
 
-  static final DateTime _today = DateTime.now(); 
+  static final DateTime _today = DateTime.now();
   List<Map<String, String>> _collections = [];
   final Map<String, String> _receiptToId = {}; // receipt_number -> id
   List<Customer> _customers = [];
   List<LoanRecord> _allLoans = [];
   List<String> _agentNames = [];
   Map<String, List<RepaymentInstallment>> _schedulesByLoan = {};
+  List<AgentCustomerGroup> _collectionGroups = [];
 
   @override
   void initState() {
@@ -89,11 +100,11 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
     });
   }
 
-  // ---------- API <-> UI mapping ----------
 
   static const Map<int, String> _monthNames = {
-    1: 'Jan',    2: 'Feb',    3: 'Mar',    4: 'Apr',    5: 'May',    6: 'Jun',    7: 'Jul',
-    8: 'Aug',    9: 'Sep',    10: 'Oct',    11: 'Nov',    12: 'Dec',
+    1: 'Jan',    2: 'Feb',    3: 'Mar',    4: 'Apr',
+    5: 'May',    6: 'Jun',    7: 'Jul',    8: 'Aug',
+    9: 'Sep',    10: 'Oct',    11: 'Nov',    12: 'Dec',
   };
 
   String _formatApiDate(dynamic raw) {
@@ -179,7 +190,7 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
     }
 
     return {
-      'id': id, 
+      'id': id,
       'customer_id': (row['customer_id'] ?? '').toString(),
       'customer': customerName.isEmpty ? '-' : customerName,
       'initials': _initials(customerName.isEmpty ? '-' : customerName),
@@ -210,17 +221,25 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
       final agentsFuture = LoanService.instance.fetchAgents();
       final customers = await customersFuture;
       final agents = await agentsFuture;
+      // Always bypass LoanService's cache: a collection (penalty payments
+      // included) is recalculated on the backend, so cached loans and
+      // schedules would keep showing the old penalty and total due.
       final loans = await LoanService.instance.fetchLoans(
         customers: customers,
         agents: agents,
+        forceRefresh: true,
       );
-      final scheduleRows = await LoanService.instance.fetchRepaymentSchedulesForLoans(
+      final scheduleRows =
+          await LoanService.instance.fetchRepaymentSchedulesForLoans(
         loans.map((loan) => loan.id).toList(),
+        forceRefresh: true,
       );
       final rows = await CollectionApiService.fetchCollections(
         limit: 200,
         order: 'collection_date.desc',
       );
+      final collectionGroups =
+          await AgentCollectionApiService.fetchAllCollectionGroups();
       final schedules = <String, List<RepaymentInstallment>>{
         for (final entry in scheduleRows.entries) entry.key: entry.value,
       };
@@ -232,6 +251,7 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
         _agentNames = agents.map((agent) => agent.name).toList()..sort();
         _schedulesByLoan = schedules;
         _collections = mapped;
+        _collectionGroups = collectionGroups;
         _isLoading = false;
       });
     } catch (e) {
@@ -252,7 +272,9 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
       int.tryParse(amount.replaceAll(RegExp(r'[₹,]'), '')) ?? 0;
 
   static const Map<String, int> _months = {
-    'Jan': 1,    'Feb': 2,    'Mar': 3,    'Apr': 4,    'May': 5,    'Jun': 6,    'Jul': 7,    'Aug': 8,    'Sep': 9,    'Oct': 10,    'Nov': 11,    'Dec': 12,
+    'Jan': 1,    'Feb': 2,    'Mar': 3,    'Apr': 4,
+    'May': 5,    'Jun': 6,    'Jul': 7,    'Aug': 8,
+    'Sep': 9,    'Oct': 10,    'Nov': 11,    'Dec': 12,
   };
 
   DateTime? _parseDate(String date) {
@@ -329,44 +351,18 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
     return '₹$buf';
   }
 
-  Widget _buildGlobalSheetFrame({required Widget child}) {
-    final double keyboardPadding = MediaQuery.of(context).viewInsets.bottom;
-    final double maxSheetHeight = MediaQuery.of(context).size.height * 0.75;
-
-    return Padding(
-      padding: EdgeInsets.only(bottom: keyboardPadding),
-      child: Container(
-        constraints: BoxConstraints(maxHeight: maxSheetHeight),
-        decoration: const BoxDecoration(
-          color: AppColors.kSurface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black12,
-              blurRadius: 20,
-              offset: Offset(0, -4),
-            ),
-          ],
-        ),
-        child: SafeArea(
-          top: false,
-          child: SingleChildScrollView(
-            child: child,
-          ),
-        ),
-      ),
-    );
-  }
-
   Map<String, List<LoanRecord>> get _loansByCustomerId {
     final byCustomerId = <String, List<LoanRecord>>{};
     for (final customer in _customers) {
       byCustomerId.putIfAbsent(customer.id, () => <LoanRecord>[]);
     }
     for (final loan in _allLoans) {
-      final customer = _customers.where((item) =>
-          item.id == loan.customerId || item.customerId == loan.customerId ||
-          item.fullName == loan.customerName).firstOrNull;
+      final customer = _customers
+          .where((item) =>
+              item.id == loan.customerId ||
+              item.customerId == loan.customerId ||
+              item.fullName == loan.customerName)
+          .firstOrNull;
       if (customer != null) {
         byCustomerId.putIfAbsent(customer.id, () => <LoanRecord>[]);
         byCustomerId[customer.id]!.add(loan);
@@ -385,13 +381,9 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
   }
 
   void _showAddCollectionDialog() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.4),
-      builder: (context) => _buildGlobalSheetFrame(
-        child: AddCollectionDialog(
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AddCollectionDialog(
           customers: _customers,
           loansByCustomer: _loansByCustomerId,
           agents: _agentNames,
@@ -403,20 +395,15 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
   }
 
   void _showEditCollectionDialog(Map<String, String> record) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.4),
-      builder: (context) => _buildGlobalSheetFrame(
-        child: AddCollectionDialog(
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AddCollectionDialog(
           customers: _customers,
           loansByCustomer: _loansByCustomerId,
           agents: _agentNames,
           schedulesByLoan: _schedulesByLoan,
           existing: record,
-          onSaved: (updated) =>
-              _updateCollectionOnBackend(record, updated),
+          onSaved: (updated) => _updateCollectionOnBackend(record, updated),
         ),
       ),
     );
@@ -434,6 +421,7 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
         'loan_number': record['loan'] == '-' ? null : record['loan'],
         'loan_type': record['loan_type'] == '-' ? null : record['loan_type'],
         'collection_amount': _parseAmount(record['amount'] ?? '0'),
+        'penalty_amount': _parseAmount(record['penalty_amount'] ?? '0'),
         'payment_method': _apiMethodValue(record['method'] ?? 'Cash'),
         'collection_date': _toIsoDate(record['date']),
         'agent_id': record['agent_id'],
@@ -461,7 +449,7 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
   }
 
   // NEW: PATCH by real id (looked up via receipt number)
- Future<void> _updateCollectionOnBackend(
+  Future<void> _updateCollectionOnBackend(
       Map<String, String> original, Map<String, String> updated) async {
     final l10n = AppLocalizations.of(context);
     final id = original['id'];
@@ -482,6 +470,9 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
         'loan_number': updated['loan'] == '-' ? null : updated['loan'],
         'loan_type': updated['loan_type'] == '-' ? null : updated['loan_type'],
         'collection_amount': _parseAmount(updated['amount'] ?? '0'),
+        // Only re-split an edited receipt when a preset was tapped.
+        if (updated['penalty_amount'] != null)
+          'penalty_amount': _parseAmount(updated['penalty_amount']!),
         'payment_method': _apiMethodValue(updated['method'] ?? 'Cash'),
         'collection_date': _toIsoDate(updated['date']),
         'agent_id': updated['agent_id'],
@@ -527,7 +518,7 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
       confirmButtonColor: AppColors.kDanger,
     );
 
-        if (confirmed == true && mounted) {
+    if (confirmed == true && mounted) {
       final id = record['id'];
       if (id == null || id.isEmpty) {
         ToastService.show(
@@ -553,6 +544,355 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
         );
       }
     }
+  }
+
+  List<AgentCustomerGroup> get _toCollectToday {
+    return _collectionGroups
+        .map((group) {
+          final payableItems = group.items
+              .where((item) =>
+                  item.status == AgentCollectionStatus.overdue ||
+                  item.status == AgentCollectionStatus.dueToday)
+              .toList();
+          if (payableItems.isEmpty) return null;
+
+          return AgentCustomerGroup(
+            customerId: group.customerId,
+            customerName: group.customerName,
+            loanId: group.loanId,
+            loanType: group.loanType,
+            loanName: group.loanName,
+            items: payableItems,
+            contactPhone: group.contactPhone,
+            address: group.address,
+            latitude: group.latitude,
+            longitude: group.longitude,
+          );
+        })
+        .whereType<AgentCustomerGroup>()
+        .toList();
+  }
+
+  double get _toCollectTodayTotal =>
+      _toCollectToday.fold(0, (sum, group) => sum + group.totalDueWithPenalty);
+
+  double get _arrearsTotal =>
+      _toCollectToday.fold(0, (sum, group) => sum + group.totalDueWithPenalty);
+
+  void _showCollectPaymentSheet(AgentCustomerGroup group) {
+    final overdueItems = group.payableDueItems;
+    final hasPayableDue = overdueItems.isNotEmpty;
+    final dueAmount = hasPayableDue ? group.overdueDueAmount : group.totalDue;
+    final dueCount = hasPayableDue ? group.overdueDueCount : group.items.length;
+    final isMonthlyInterest =
+        group.collectionType == LoanCollectionType.monthlyInterest;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.4),
+      builder: (context) => CollectPaymentSheet(
+        customerName: group.customerName,
+        loanCollectionType: group.collectionType,
+        subtitleLabel:
+            isMonthlyInterest ? 'Monthly Interest Loan' : 'Due Amount',
+        subtitleValue: isMonthlyInterest
+            ? (group.loanNumbers.isNotEmpty
+                ? group.loanNumbers.first
+                : group.loanId)
+            : AgentCollectionItem.formatAmount(dueAmount),
+        prefillAmount: dueAmount,
+        installmentAmount:
+            group.items.isNotEmpty ? group.items.first.installmentAmount : null,
+        dueAmount: dueAmount,
+        penaltyAmount: group.totalPenalty,
+        outstandingBalance: group.totalOutstanding,
+        dueCount: dueCount,
+        onSubmit: (amount, method, date, notes, paymentType, penalty) =>
+            _collectAdminPayment(
+                group, amount, method, date, notes, paymentType, penalty),
+      ),
+    );
+  }
+
+  Future<void> _collectAdminPayment(
+    AgentCustomerGroup group,
+    double amount,
+    String method,
+    DateTime date,
+    String? notes,
+    String paymentType,
+    double penaltyAmount,
+  ) async {
+    final l10n = AppLocalizations.of(context);
+    try {
+      final createdCount = await AgentCollectionApiService.collectForCustomer(
+        group: group,
+        amount: amount,
+        paymentMethod: method,
+        collectionDate: date,
+        notes: notes,
+        paymentType: paymentType,
+        penaltyAmount: penaltyAmount,
+      );
+      if (!mounted) return;
+      ToastService.show(
+        title: l10n.collectionsRecordedTitle,
+        message:
+            '${group.customerName} • $createdCount installment(s) recorded',
+        type: ToastType.success,
+      );
+      await _loadCollections();
+    } catch (e) {
+      ToastService.show(
+        title: l10n.collectionsSaveFailedTitle,
+        message: e.toString(),
+        type: ToastType.error,
+      );
+    }
+  }
+
+  Widget _buildToCollectToday(bool isNarrow) {
+    final groups = _toCollectToday;
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: isNarrow ? 20 : 24),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.kSurface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.kBorder),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Expanded(
+                  child: Text('To Collect Today',
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                ),
+                Text(AgentCollectionItem.formatAmount(_toCollectTodayTotal),
+                    style: const TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.w800)),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${groups.length} customer${groups.length == 1 ? '' : 's'} • '
+              '${AgentCollectionItem.formatAmount(_arrearsTotal)} in arrears',
+              style: const TextStyle(color: AppColors.kTextMuted),
+            ),
+            if (groups.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Text('No pending collections',
+                      style: TextStyle(color: AppColors.kTextMuted)),
+                ),
+              )
+            else ...[
+              const SizedBox(height: 12),
+              ...groups.take(6).map(_buildToCollectRow),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildToCollectRow(AgentCustomerGroup group) {
+    final statusParts = <String>[];
+    if (group.overdueCount > 0) {
+      statusParts.add('Overdue - ${group.overdueCount}');
+    }
+    if (group.dueTodayCount > 0) {
+      statusParts.add('Today - ${group.dueTodayCount}');
+    }
+    final status = statusParts.join(' • ');
+    final statusColor =
+        group.hasOverdue ? AppColors.kDanger : AppColors.kWarning;
+    final scheduleDates = group.payableDueItems
+        .map((item) => item.dueDate)
+        .whereType<DateTime>()
+        .map(AgentCollectionItem.formatDate)
+        .toSet()
+        .toList();
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: group.hasOverdue
+              ? AppColors.kDanger.withValues(alpha: 0.25)
+              : AppColors.kBorder,
+        ),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 20,
+            backgroundColor: const Color(0xFFB38222),
+            child: Text(group.initials,
+                style: const TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(group.customerName,
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 3),
+                Text(
+                  '${group.loanNumbers.isNotEmpty ? group.loanNumbers.first : group.loanId} • '
+                  '${group.displayLoanType}',
+                  style: const TextStyle(
+                      fontSize: 12, color: AppColors.kTextMuted),
+                ),
+                const SizedBox(height: 5),
+                Text(status,
+                    style: TextStyle(fontSize: 12, color: statusColor)),
+                if (scheduleDates.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    scheduleDates.length == 1
+                        ? 'Schedule date: ${scheduleDates.first}'
+                        : 'Schedule dates: ${scheduleDates.join(', ')}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 11, color: AppColors.kTextMuted),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                AgentCollectionItem.formatAmount(group.totalDueWithPenalty),
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 7),
+              ElevatedButton(
+                onPressed: () => _showCollectPaymentSheet(group),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFA9791F),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  minimumSize: const Size(0, 36),
+                ),
+                child: const Text('Collect'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTodaysCollections(bool isNarrow) {
+    final today = DateTime.now();
+    final rows = _collections.where((row) {
+      final date = _parseDate(row['date'] ?? '');
+      return date != null &&
+          date.year == today.year &&
+          date.month == today.month &&
+          date.day == today.day;
+    }).toList();
+    final byAgent = <String, List<Map<String, String>>>{};
+    for (final row in rows) {
+      byAgent.putIfAbsent(row['agent'] ?? 'Unassigned', () => []).add(row);
+    }
+    final total =
+        rows.fold<double>(0, (sum, row) => sum + _parseAmount(row['amount']!));
+
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: isNarrow ? 20 : 24),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.kSurface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.kBorder),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Expanded(
+                  child: Text("Today's Collections",
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                ),
+                Text(AgentCollectionItem.formatAmount(total),
+                    style: const TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.w800)),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${rows.length} receipt${rows.length == 1 ? '' : 's'} • '
+              '${byAgent.length} collector${byAgent.length == 1 ? '' : 's'}',
+              style: const TextStyle(color: AppColors.kTextMuted),
+            ),
+            if (byAgent.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Text('No collections recorded today',
+                      style: TextStyle(color: AppColors.kTextMuted)),
+                ),
+              )
+            else ...[
+              const SizedBox(height: 12),
+              ...byAgent.entries.map((entry) {
+                final agentTotal = entry.value.fold<double>(
+                    0, (sum, row) => sum + _parseAmount(row['amount']!));
+                return Container(
+                  margin: const EdgeInsets.only(top: 8),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: AppColors.kBorder),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 18,
+                        backgroundColor: const Color(0xFFB38222),
+                        child: Text(_initials(entry.key),
+                            style: const TextStyle(color: Colors.white)),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          '${entry.key}\n${entry.value.length} receipt${entry.value.length == 1 ? '' : 's'}',
+                          style: const TextStyle(
+                              fontSize: 13, color: AppColors.kTextMuted),
+                        ),
+                      ),
+                      Text(AgentCollectionItem.formatAmount(agentTotal),
+                          style: const TextStyle(fontWeight: FontWeight.w800)),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -615,6 +955,10 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
                             ),
                             _buildStatCards(isNarrow, l10n),
                             const SizedBox(height: 16),
+                            _buildToCollectToday(isNarrow),
+                            const SizedBox(height: 16),
+                            _buildTodaysCollections(isNarrow),
+                            const SizedBox(height: 16),
                             _buildSearchAndFilters(l10n),
                             const SizedBox(height: 8),
                             _buildCollectionsTable(isNarrow, l10n),
@@ -663,13 +1007,7 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
     return Padding(
       padding:
           EdgeInsets.symmetric(horizontal: isNarrow ? 20 : 24, vertical: 8),
-      child: GridView.count(
-        crossAxisCount: isNarrow ? 2 : 4,
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        childAspectRatio: isNarrow ? 1.7 : 2.1,
+      child: ResponsiveStatGrid(
         children: cards.map((c) => _StatCard(data: c)).toList(),
       ),
     );
@@ -749,14 +1087,14 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
     );
   }
 
-Widget _buildCollectionsTable(bool isNarrow, AppLocalizations l10n) {
+  Widget _buildCollectionsTable(bool isNarrow, AppLocalizations l10n) {
     final allItems = _filtered;
     // Show only 6 items unless _showAll is expanded
     final items = _showAll ? allItems : allItems.take(6).toList();
 
     final table = DataTable(
-      dataRowMinHeight: 60, 
-      dataRowMaxHeight: 70, 
+      dataRowMinHeight: 60,
+      dataRowMaxHeight: 70,
       headingTextStyle: const TextStyle(
         color: AppColors.kTextMuted,
         fontWeight: FontWeight.bold,
@@ -814,13 +1152,13 @@ Widget _buildCollectionsTable(bool isNarrow, AppLocalizations l10n) {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
-                color: const Color(0xFFE4F0FF), 
+                color: const Color(0xFFE4F0FF),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
                 localizedPaymentMethodLabel(c['method']!, l10n),
                 style: const TextStyle(
-                  color: Color(0xFF4A90E2), 
+                  color: Color(0xFF4A90E2),
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                 ),
@@ -896,7 +1234,7 @@ Widget _buildCollectionsTable(bool isNarrow, AppLocalizations l10n) {
                     ),
                   ),
                 ),
-                
+
                 // Show More / Show Less Button
                 if (allItems.length > 6)
                   Padding(
@@ -909,7 +1247,9 @@ Widget _buildCollectionsTable(bool isNarrow, AppLocalizations l10n) {
                           });
                         },
                         icon: Icon(
-                          _showAll ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                          _showAll
+                              ? Icons.keyboard_arrow_up
+                              : Icons.keyboard_arrow_down,
                           color: AppColors.kInfo,
                         ),
                         label: Text(
@@ -946,6 +1286,7 @@ class _StatCardData {
     required this.iconBg,
   });
 }
+
 class _StatCard extends StatelessWidget {
   final _StatCardData data;
   const _StatCard({required this.data});
@@ -974,6 +1315,7 @@ class _StatCard extends StatelessWidget {
                   alignment: Alignment.centerLeft,
                   child: Text(
                     data.value,
+                    maxLines: 1,
                     style: const TextStyle(
                       color: AppColors.kTextDark,
                       fontSize: 18,
@@ -1051,12 +1393,19 @@ class _AddCollectionDialogState extends State<AddCollectionDialog> {
   bool get _isEdit => widget.existing != null;
 
   String? _customerId;
+  // Customer picker search: name, mobile, customer ID or loan number.
+  final TextEditingController _customerSearchController =
+      TextEditingController();
+  String _customerQuery = '';
   String? _loanNumber;
   final TextEditingController _amountController = TextEditingController();
   String _paymentMethod = 'Cash';
   final TextEditingController _dateController = TextEditingController();
   String? _agent;
   String? _paymentPurpose;
+  // Penalty included in the preset last tapped (₹0 for "1 EMI"). Null until
+  // a preset is tapped, so editing an old receipt leaves its split alone.
+  double? _presetPenalty;
   final TextEditingController _notesController = TextEditingController();
   String? _screenshotFileName;
   String? _signatureFileName;
@@ -1094,15 +1443,33 @@ class _AddCollectionDialogState extends State<AddCollectionDialog> {
     return unpaid.isNotEmpty ? unpaid.first.balance : loan.emiAmount;
   }
 
-  double _overdueDueAmount(LoanRecord loan) {
+  Iterable<RepaymentInstallment> _overdueScheduleFor(LoanRecord loan) {
     final now = DateTime.now();
-    final overdue = _unpaidScheduleFor(loan).where((item) {
+    return _unpaidScheduleFor(loan).where((item) {
       final dueDate = item.dueDate;
       return item.status.toLowerCase() == 'overdue' ||
           (dueDate != null && dueDate.isBefore(now));
     });
-    return overdue.fold<double>(
-        0, (total, item) => total + item.balance + item.penaltyAmount);
+  }
+
+  double _overdueDueAmount(LoanRecord loan) => _overdueScheduleFor(loan)
+      .fold<double>(0, (total, item) => total + item.balance + item.penaltyAmount);
+
+  double _overduePenalty(LoanRecord loan) => _overdueScheduleFor(loan)
+      .fold<double>(0, (total, item) => total + item.penaltyAmount);
+
+  double _totalPenalty(LoanRecord loan) {
+    final schedule = _scheduleFor(loan);
+    if (schedule.isEmpty) return loan.penaltyAmount;
+    return schedule.fold<double>(0, (total, item) => total + item.penaltyAmount);
+  }
+
+  /// How much of [amount] is penalty. The backend keeps this part off the
+  /// instalments and settles it against the loan's penalty, so collecting
+  /// ₹50 of a ₹100 penalty leaves ₹50 penalty and the EMIs untouched.
+  double _penaltyPortion(double amount) {
+    final penalty = _presetPenalty ?? 0;
+    return penalty <= 0 ? 0 : (amount < penalty ? amount : penalty);
   }
 
   double _fullBalance(LoanRecord loan) {
@@ -1156,6 +1523,7 @@ class _AddCollectionDialogState extends State<AddCollectionDialog> {
 
   @override
   void dispose() {
+    _customerSearchController.dispose();
     _amountController.dispose();
     _dateController.dispose();
     _notesController.dispose();
@@ -1200,7 +1568,8 @@ class _AddCollectionDialogState extends State<AddCollectionDialog> {
       'receipt': _isEdit
           ? widget.existing!['receipt']!
           : 'RCP-${(DateTime.now().millisecondsSinceEpoch % 100000000).toString().padLeft(8, '0')}',
-      if (_isEdit && widget.existing!['id'] != null) 'id': widget.existing!['id']!,
+      if (_isEdit && widget.existing!['id'] != null)
+        'id': widget.existing!['id']!,
       'loan': _loanNumber ?? '-',
       if (_selectedLoan != null) ...{
         'loan_id': _selectedLoan!.id,
@@ -1213,9 +1582,13 @@ class _AddCollectionDialogState extends State<AddCollectionDialog> {
       'agent': _agent ?? 'Unassigned',
       if (_selectedLoan?.agentId != null) 'agent_id': _selectedLoan!.agentId!,
       'status': _isEdit ? widget.existing!['status']! : 'Collected',
+      if (_presetPenalty != null)
+        'penalty_amount':
+            _penaltyPortion(amountValue.toDouble()).round().toString(),
       'notes': [
         if (_paymentPurpose != null) _paymentPurpose!,
-        if (_notesController.text.trim().isNotEmpty) _notesController.text.trim(),
+        if (_notesController.text.trim().isNotEmpty)
+          _notesController.text.trim(),
       ].join(' | '),
       if (screenshotBase64 != null) 'payment_screenshot': screenshotBase64,
       if (signatureBase64 != null) 'customer_signature': signatureBase64,
@@ -1224,7 +1597,9 @@ class _AddCollectionDialogState extends State<AddCollectionDialog> {
     widget.onSaved?.call(record);
     Navigator.of(context).pop();
     ToastService.show(
-      title: _isEdit ? l10n.collectionsUpdatedTitle : l10n.collectionsRecordedTitle,
+      title: _isEdit
+          ? l10n.collectionsUpdatedTitle
+          : l10n.collectionsRecordedTitle,
       message: record['customer'],
       type: ToastType.success,
     );
@@ -1233,14 +1608,6 @@ class _AddCollectionDialogState extends State<AddCollectionDialog> {
   String _formatCurrentDate() {
     final now = DateTime.now();
     return '${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year}';
-  }
-
-  void _generateReceipt() {
-    final l10n = AppLocalizations.of(context);
-    ToastService.show(
-      title: l10n.collectionsGeneratingReceiptTitle,
-      type: ToastType.info,
-    );
   }
 
   Future<void> _pickFile({required bool isSignature}) async {
@@ -1264,7 +1631,8 @@ class _AddCollectionDialogState extends State<AddCollectionDialog> {
   }
 
   Future<void> _selectCollectionDate() async {
-    final current = _parseCollectionDate(_dateController.text) ?? DateTime.now();
+    final current =
+        _parseCollectionDate(_dateController.text) ?? DateTime.now();
     final selected = await showDatePicker(
       context: context,
       initialDate: current,
@@ -1291,8 +1659,18 @@ class _AddCollectionDialogState extends State<AddCollectionDialog> {
       }
     }
     const months = {
-      'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
-      'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12,
+      'Jan': 1,
+      'Feb': 2,
+      'Mar': 3,
+      'Apr': 4,
+      'May': 5,
+      'Jun': 6,
+      'Jul': 7,
+      'Aug': 8,
+      'Sep': 9,
+      'Oct': 10,
+      'Nov': 11,
+      'Dec': 12,
     };
     final parts = value.split(' ');
     if (parts.length == 3) {
@@ -1306,44 +1684,209 @@ class _AddCollectionDialogState extends State<AddCollectionDialog> {
     return null;
   }
 
-  void _setAmountWithPurpose(double amount, String? purpose) {
+  void _setAmountWithPurpose(double amount, String? purpose,
+      {double penalty = 0}) {
     _amountController.text = amount.round().toString();
     _paymentPurpose = purpose;
+    _presetPenalty = penalty;
     _amountController.selection = TextSelection.fromPosition(
       TextPosition(offset: _amountController.text.length),
     );
     setState(() {});
   }
 
+  /// The label half of a "Label: {amount}" summary string, so the label and
+  /// value can be styled separately without new translation keys.
+  String _summaryLabel(String Function(String) message) =>
+      message('').replaceAll(RegExp(r'[:\s]+$'), '');
+
+  Color _statusColor(String status) {
+    final s = status.toLowerCase();
+    if (s.contains('overdue') || s.contains('default')) {
+      return AppColors.gold800;
+    }
+    return AppColors.kGold;
+  }
+
   Widget _buildLoanSummary(LoanRecord loan, AppLocalizations l10n) {
     final totalDue = _fullBalance(loan);
     final overdueDue = _overdueDueAmount(loan);
+    final statusColor = _statusColor(loan.status);
+
+    Widget metric(String label, String value, IconData icon, {Color? accent}) {
+      final color = accent ?? AppColors.gold900;
+      return Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: accent != null
+              ? accent.withValues(alpha: 0.06)
+              : AppColors.kSurface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+              color: accent != null
+                  ? accent.withValues(alpha: 0.25)
+                  : AppColors.gold200),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: (accent ?? AppColors.kGold).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, size: 14, color: accent ?? AppColors.kGold),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 11, color: AppColors.gold700)),
+                  const SizedBox(height: 2),
+                  Text(value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: color)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final metrics = [
+      metric(_summaryLabel(l10n.collectionsSummaryPrincipal),
+          loan.formattedAmount, Icons.account_balance_wallet_outlined),
+      metric(
+          _summaryLabel(l10n.collectionsSummaryInstallment),
+          LoanRecord.formatRupees(_nextInstallmentAmount(loan)),
+          Icons.event_repeat_outlined),
+      metric(_summaryLabel(l10n.collectionsSummaryOutstanding),
+          loan.formattedOutstanding, Icons.hourglass_bottom_outlined),
+      metric(_summaryLabel(l10n.collectionsSummaryOverdueDue),
+          LoanRecord.formatRupees(overdueDue), Icons.warning_amber_outlined,
+          accent: overdueDue > 0 ? AppColors.gold700 : null),
+      metric(_summaryLabel(l10n.collectionsSummaryPenalty),
+          loan.formattedPenalty, Icons.gavel_outlined,
+          accent: loan.penaltyAmount > 0 ? AppColors.gold700 : null),
+    ];
+
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(12),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: AppColors.kBackground,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.kBorder),
+        color: AppColors.kSurface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.gold200),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-              '${friendlyCollectionTypeLabel(loan, l10n)} • ${localizedStatusLabel(loan.status, l10n)}',
-              style: const TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 6),
-          Text(l10n.collectionsSummaryAgent(loan.agentName)),
-          Text(l10n.collectionsSummaryPrincipal(loan.formattedAmount)),
-          Text(l10n.collectionsSummaryInstallment(
-              LoanRecord.formatRupees(_nextInstallmentAmount(loan)))),
-          Text(l10n.collectionsSummaryOutstanding(loan.formattedOutstanding)),
-          Text(l10n.collectionsSummaryOverdueDue(
-              LoanRecord.formatRupees(overdueDue))),
-          Text(l10n.collectionsSummaryPenalty(loan.formattedPenalty)),
-          Text(l10n.collectionsSummaryTotalDue(
-              LoanRecord.formatRupees(totalDue)),
-              style: const TextStyle(fontWeight: FontWeight.w700)),
+          // Header: collection type, status and agent.
+          Container(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [AppColors.gold50, AppColors.gold100],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.receipt_long_outlined,
+                    size: 18, color: AppColors.kGoldDark),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(friendlyCollectionTypeLabel(loan, l10n),
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.gold900)),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(localizedStatusLabel(loan.status, l10n),
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: statusColor)),
+                ),
+                const Spacer(),
+                const Icon(Icons.person_outline,
+                    size: 16, color: AppColors.gold700),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(loan.agentName,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.gold800)),
+                ),
+              ],
+            ),
+          ),
+          // Body: two-column metric tiles.
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: LayoutBuilder(builder: (context, constraints) {
+              const gap = 8.0;
+              final tileWidth = (constraints.maxWidth - gap) / 2;
+              return Wrap(
+                spacing: gap,
+                runSpacing: gap,
+                children: [
+                  for (final tile in metrics)
+                    SizedBox(width: tileWidth, child: tile),
+                ],
+              );
+            }),
+          ),
+          // Footer: total due.
+          Container(
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [AppColors.gold500, AppColors.gold700],
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+              ),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(_summaryLabel(l10n.collectionsSummaryTotalDue),
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white)),
+                ),
+                Text(LoanRecord.formatRupees(totalDue),
+                    style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white)),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1355,49 +1898,411 @@ class _AddCollectionDialogState extends State<AddCollectionDialog> {
     final fullBalance = _fullBalance(loan);
     final overdueDue = _overdueDueAmount(loan);
     final isInterestOnly = collectionTypeOptionKey(loan) == 'Monthly Interest';
+    final entered = _parseAmount(_amountController.text).toDouble();
+    final isPenaltyPayment =
+        _paymentPurpose == AgentCollectionApiService.penaltyNote;
+    final remaining =
+        (fullBalance - entered).clamp(0, double.infinity).toDouble();
+    final penaltyRemaining = (loan.penaltyAmount - _penaltyPortion(entered))
+        .clamp(0, double.infinity)
+        .toDouble();
 
-    Widget preset(String label, double amount, IconData icon,
-        [String? purpose]) {
-      return OutlinedButton.icon(
-        onPressed: () => _setAmountWithPurpose(amount, purpose),
-        icon: Icon(icon, size: 16),
-        label: Text('$label (${LoanRecord.formatRupees(amount)})'),
+    Widget preset(String label, double amount, IconData icon, Color color,
+        [String? purpose, double penalty = 0]) {
+      // A labelled preset stays selected when the amount is edited, so
+      // typing ₹50 after tapping Penalty is still a penalty payment.
+      final selected = entered > 0 &&
+          _paymentPurpose == purpose &&
+          (purpose != null || entered == amount.roundToDouble());
+      return Material(
+        color: selected ? color.withValues(alpha: 0.10) : AppColors.kSurface,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () =>
+              _setAmountWithPurpose(amount, purpose, penalty: penalty),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: selected ? color : AppColors.gold200,
+                width: selected ? 1.5 : 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.12),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(icon, size: 16, color: color),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 11, color: AppColors.gold700)),
+                      const SizedBox(height: 2),
+                      Text(LoanRecord.formatRupees(amount),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: selected ? color : AppColors.gold900)),
+                    ],
+                  ),
+                ),
+                if (selected) Icon(Icons.check_circle, size: 16, color: color),
+              ],
+            ),
+          ),
+        ),
       );
     }
 
-    final entered = _parseAmount(_amountController.text).toDouble();
-    final remaining = (fullBalance - entered).clamp(0, double.infinity).toDouble();
+    final presets = [
+      preset(
+        isInterestOnly
+            ? l10n.collectionsPresetFillInterest
+            : l10n.collectionsPresetOneEmi,
+        installment,
+        Icons.bolt,
+        AppColors.kGold,
+        isInterestOnly ? l10n.collectionsPurposeMonthlyInterest : null,
+      ),
+      if (overdueDue > 0)
+        preset(l10n.collectionsPresetPayDue, overdueDue,
+            Icons.warning_amber_outlined, AppColors.gold700, null,
+            _overduePenalty(loan)),
+      preset(
+          l10n.collectionsPresetPrincipalPartPayment,
+          principalPartPayment,
+          Icons.payments_outlined,
+          AppColors.kGoldDark,
+          l10n.collectionsPresetPrincipalPartPayment),
+      preset(l10n.collectionsPresetFullBalance, fullBalance,
+          Icons.done_all_rounded, AppColors.gold700, null,
+          _totalPenalty(loan)),
+      // The penalty part is sent as `penalty_amount`, which is what keeps it
+      // off the instalments. The note only labels the receipt, so it stays
+      // untranslated.
+      if (loan.penaltyAmount > 0)
+        preset(
+            l10n.collectionsPresetPenalty,
+            loan.penaltyAmount,
+            Icons.gavel_outlined,
+            AppColors.gold800,
+            AgentCollectionApiService.penaltyNote,
+            loan.penaltyAmount),
+    ];
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            preset(
-              isInterestOnly
-                  ? l10n.collectionsPresetFillInterest
-                  : l10n.collectionsPresetOneEmi,
-              installment,
-              Icons.bolt,
-              isInterestOnly ? l10n.collectionsPurposeMonthlyInterest : null,
+        LayoutBuilder(builder: (context, constraints) {
+          const gap = 8.0;
+          final tileWidth = (constraints.maxWidth - gap) / 2;
+          return Wrap(
+            spacing: gap,
+            runSpacing: gap,
+            children: [
+              for (final tile in presets)
+                SizedBox(width: tileWidth, child: tile),
+            ],
+          );
+        }),
+        if (entered > 0) ...[
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppColors.gold50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppColors.gold200),
             ),
-            if (overdueDue > 0)
-              preset(l10n.collectionsPresetPayDue, overdueDue,
-                  Icons.warning_amber_outlined),
-            preset(l10n.collectionsPresetPrincipalPartPayment,
-                principalPartPayment, Icons.payments_outlined,
-                l10n.collectionsPresetPrincipalPartPayment),
-            preset(l10n.collectionsPresetFullBalance, fullBalance, Icons.bolt),
+            child: Row(
+              children: [
+                const Icon(Icons.info_outline,
+                    size: 14, color: AppColors.kGoldDark),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    isPenaltyPayment
+                        ? l10n.collectionsPenaltySummaryLine(
+                            LoanRecord.formatRupees(entered),
+                            LoanRecord.formatRupees(penaltyRemaining))
+                        : l10n.collectionsPaymentSummaryLine(
+                            LoanRecord.formatRupees(entered),
+                            LoanRecord.formatRupees(remaining)),
+                    style:
+                        const TextStyle(fontSize: 12, color: AppColors.gold900),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Customers matching the search box by name, mobile, customer ID or any
+  /// of their loan numbers. Names that start with the query rank first.
+  List<Customer> get _matchingCustomers {
+    final query = _customerQuery.trim().toLowerCase();
+    if (query.isEmpty) return const [];
+    final digits = query.replaceAll(RegExp(r'\D'), '');
+
+    bool matches(Customer customer) {
+      if (customer.fullName.toLowerCase().contains(query)) return true;
+      if (customer.customerId.toLowerCase().contains(query)) return true;
+      final mobile = (customer.mobile ?? '').replaceAll(RegExp(r'\D'), '');
+      if (digits.length >= 3 && mobile.contains(digits)) return true;
+      final loans = widget.loansByCustomer[customer.id] ?? const [];
+      return loans.any((loan) => loan.loanNumber.toLowerCase().contains(query));
+    }
+
+    final results = widget.customers.where(matches).toList()
+      ..sort((a, b) {
+        final aStarts = a.fullName.toLowerCase().startsWith(query) ? 0 : 1;
+        final bStarts = b.fullName.toLowerCase().startsWith(query) ? 0 : 1;
+        if (aStarts != bStarts) return aStarts - bStarts;
+        return a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase());
+      });
+    return results;
+  }
+
+  void _selectCustomer(String? customerId) {
+    FocusScope.of(context).unfocus();
+    _customerSearchController.clear();
+    setState(() {
+      _customerQuery = '';
+      _customerId = customerId;
+      _loanNumber = null;
+      _agent = null;
+      _paymentPurpose = null;
+      _presetPenalty = null;
+      _amountController.clear();
+    });
+  }
+
+  /// "RR007 • 98765 43210" style detail line for a customer.
+  String _customerDetailLine(Customer customer) => [
+        customer.customerId,
+        customer.mobile ?? '',
+      ].where((part) => part.trim().isNotEmpty).join(' • ');
+
+  Widget _customerAvatar(Customer customer, {double radius = 18}) =>
+      CircleAvatar(
+        radius: radius,
+        backgroundColor: AppColors.gold100,
+        child: Text(
+          _initials(customer.fullName.isEmpty ? '?' : customer.fullName),
+          style: TextStyle(
+              fontSize: radius * 0.72,
+              fontWeight: FontWeight.w700,
+              color: AppColors.gold800),
+        ),
+      );
+
+  /// Search box for picking the customer. Typing lists the matching
+  /// customers; tapping one selects it and shows it as a card with a
+  /// "Change" action to search again.
+  Widget _buildCustomerPicker(AppLocalizations l10n) {
+    final selected = _selectedCustomer;
+    if (selected != null) {
+      final loanCount = widget.loansByCustomer[selected.id]?.length ?? 0;
+      final detail = _customerDetailLine(selected);
+      return Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+        decoration: BoxDecoration(
+          color: AppColors.gold50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.gold200),
+        ),
+        child: Row(
+          children: [
+            _customerAvatar(selected, radius: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(selected.fullName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.kTextDark)),
+                  const SizedBox(height: 2),
+                  Text(
+                    [
+                      if (detail.isNotEmpty) detail,
+                      l10n.collectionsCustomerLoanCount(loanCount),
+                    ].join(' • '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 12, color: AppColors.kTextMuted),
+                  ),
+                ],
+              ),
+            ),
+            TextButton.icon(
+              onPressed: () => _selectCustomer(null),
+              icon: const Icon(Icons.swap_horiz, size: 18),
+              label: Text(l10n.collectionsChangeCustomer),
+              style: TextButton.styleFrom(foregroundColor: AppColors.kGold),
+            ),
           ],
         ),
-        if (entered > 0) ...[
-          const SizedBox(height: 8),
-          Text(
-            l10n.collectionsPaymentSummaryLine(
-                LoanRecord.formatRupees(entered),
-                LoanRecord.formatRupees(remaining)),
-            style: const TextStyle(fontSize: 12, color: AppColors.kTextMuted),
+      );
+    }
+
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(10),
+      borderSide: const BorderSide(color: AppColors.kBorder),
+    );
+    final matches = _matchingCustomers;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _customerSearchController,
+          enabled: widget.customers.isNotEmpty,
+          textInputAction: TextInputAction.search,
+          onChanged: (v) => setState(() => _customerQuery = v),
+          onSubmitted: (_) {
+            if (matches.length == 1) _selectCustomer(matches.first.id);
+          },
+          decoration: InputDecoration(
+            isDense: true,
+            hintText: l10n.collectionsCustomerSearchHint,
+            hintMaxLines: 1,
+            prefixIcon: const Icon(Icons.search, size: 20),
+            suffixIcon: _customerQuery.isEmpty
+                ? null
+                : IconButton(
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () {
+                      _customerSearchController.clear();
+                      setState(() => _customerQuery = '');
+                    },
+                  ),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            border: border,
+            enabledBorder: border,
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: AppColors.kGold, width: 1.4),
+            ),
+          ),
+        ),
+        if (_customerQuery.trim().isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Container(
+            constraints: const BoxConstraints(maxHeight: 280),
+            decoration: BoxDecoration(
+              color: AppColors.kSurface,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: AppColors.kBorder),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.ink900.withValues(alpha: 0.06),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: matches.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.person_search_outlined,
+                            size: 18, color: AppColors.kTextMuted),
+                        const SizedBox(width: 8),
+                        Text(
+                          l10n.collectionsCustomerNoMatches,
+                          style: const TextStyle(
+                              fontSize: 13, color: AppColors.kTextMuted),
+                        ),
+                      ],
+                    ),
+                  )
+                : ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      padding: EdgeInsets.zero,
+                      itemCount: matches.length,
+                      separatorBuilder: (_, __) =>
+                          const Divider(height: 1, color: AppColors.kBorder),
+                      itemBuilder: (context, i) {
+                        final customer = matches[i];
+                        final loanCount =
+                            widget.loansByCustomer[customer.id]?.length ?? 0;
+                        final detail = _customerDetailLine(customer);
+                        return ListTile(
+                          dense: true,
+                          leading: _customerAvatar(customer),
+                          title: Text(
+                            customer.fullName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.kTextDark),
+                          ),
+                          subtitle: detail.isEmpty
+                              ? null
+                              : Text(
+                                  detail,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      color: AppColors.kTextMuted),
+                                ),
+                          trailing: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: loanCount > 0
+                                  ? AppColors.gold50
+                                  : AppColors.ink50,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              l10n.collectionsCustomerLoanCount(loanCount),
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: loanCount > 0
+                                      ? AppColors.gold700
+                                      : AppColors.kTextMuted),
+                            ),
+                          ),
+                          onTap: () => _selectCustomer(customer.id),
+                        );
+                      },
+                    ),
+                  ),
           ),
         ],
       ],
@@ -1407,196 +2312,280 @@ class _AddCollectionDialogState extends State<AddCollectionDialog> {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final customerOptions = [...widget.customers]
-      ..sort((a, b) => a.fullName.compareTo(b.fullName));
     final availableLoans = _availableLoans;
     final selectedLoan = _selectedLoan;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    InputDecoration _modernDecoration(
+        {required String hint, IconData? iconData}) {
+      return InputDecoration(
+        hintText: hint,
+        hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 14),
+        suffixIcon: iconData != null
+            ? Icon(iconData, color: AppColors.kTextMuted, size: 20)
+            : null,
+        filled: true,
+        fillColor: Colors.grey.shade50,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey.shade200),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide:
+              BorderSide(color: Theme.of(context).primaryColor, width: 1.5),
+        ),
+      );
+    }
+
+    return AppShell(
+      currentRoute: AppRoutes.collections,
+      title: _isEdit ? l10n.collectionsEditTitle : l10n.collectionsAddButton,
+      showBackButton: true,
+      body: Container(
+        color: Colors.white,
+        child: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(_isEdit ? l10n.collectionsEditTitle : l10n.collectionsAddButton,
-                  style: const TextStyle(
-                      fontSize: 20,
+              _label(l10n.collectionsCustomerRequiredLabel),
+              _buildCustomerPicker(l10n),
+              const SizedBox(height: 16),
+
+              _label(l10n.collectionsLoanNumberLabel),
+              DropdownButtonFormField<String>(
+                key: ValueKey('loan-$_customerId'),
+                isExpanded: true,
+                initialValue: _loanNumber,
+                icon: const Icon(Icons.keyboard_arrow_down_rounded,
+                    color: AppColors.kTextMuted),
+                decoration: _modernDecoration(
+                  hint: _customerId == null
+                      ? l10n.collectionsSelectCustomerFirstHint
+                      : l10n.collectionsSelectLoanHint,
+                  iconData: Icons.account_balance_wallet_outlined,
+                ),
+                items: availableLoans
+                    .map((loan) => DropdownMenuItem(
+                          value: loan.loanNumber,
+                          child: Text(
+                            '${loan.loanNumber} • ${LoanRecord.formatRupees(loan.principalAmount)}\n'
+                            '${friendlyCollectionTypeLabel(loan, l10n)}: ${LoanRecord.formatRupees(loan.emiAmount)} • '
+                            '${l10n.collectionsOutstandingAbbrev}: ${loan.formattedOutstandingWithPenalty} '
+                            '(${localizedStatusLabel(loan.status, l10n)})',
+                            style: const TextStyle(fontSize: 13, height: 1.4),
+                          ),
+                        ))
+                    .toList(),
+                onChanged: _customerId == null
+                    ? null
+                    : (v) => setState(() {
+                          _loanNumber = v;
+                          _agent = _selectedLoan?.agentName;
+                          // A preset belongs to the loan it was tapped on.
+                          _paymentPurpose = null;
+                          _presetPenalty = null;
+                        }),
+              ),
+
+              Padding(
+                padding: const EdgeInsets.only(top: 6, bottom: 12),
+                child: Text(
+                  selectedLoan == null
+                      ? l10n.collectionsSelectLoanPrompt
+                      : l10n.collectionsLoansLinkedCount(availableLoans.length),
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey.shade600,
+                      fontStyle: FontStyle.italic),
+                ),
+              ),
+
+              if (selectedLoan != null) ...[
+                _buildLoanSummary(selectedLoan, l10n),
+                const SizedBox(height: 16),
+                _buildAmountPresets(selectedLoan, l10n),
+                const SizedBox(height: 16),
+              ],
+
+              _label(l10n.collectionsAmountReceivedLabel),
+              // Hero Amount Field (Colorful & Large)
+              TextField(
+                controller: _amountController,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.kTextDark),
+                decoration: InputDecoration(
+                  prefixText: '₹  ',
+                  prefixStyle: const TextStyle(
+                      fontSize: 24,
                       fontWeight: FontWeight.bold,
-                      color: AppColors.kTextDark)),
-              IconButton(
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                icon: const Icon(Icons.close, color: AppColors.kTextMuted),
-                onPressed: () => Navigator.of(context).pop(),
+                      color: Colors.black54),
+                  hintText: '0',
+                  filled: true,
+                  fillColor:
+                      AppColors.kSuccess.withOpacity(0.08), // Light green tint
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide.none),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide(
+                          color: AppColors.kSuccess.withOpacity(0.3))),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: const BorderSide(
+                          color: AppColors.kSuccess, width: 2)),
+                ),
+                onChanged: (_) => setState(() {}),
               ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          _label(l10n.collectionsCustomerRequiredLabel),
-          DropdownButtonFormField<String>(
-            isExpanded: true,
-            initialValue: _customerId,
-            decoration: InputDecoration(
-                hintText: l10n.collectionsSelectCustomerHint, isDense: true),
-            items: customerOptions
-                .map((customer) => DropdownMenuItem(
-                    value: customer.id,
-                    child: Text('${customer.fullName} (${customer.customerId})')))
-                .toList(),
-            onChanged: (v) => setState(() {
-              _customerId = v;
-              _loanNumber = null;
-              _agent = null;
-              _amountController.clear();
-            }),
-          ),
-          const SizedBox(height: 16),
-          _label(l10n.collectionsLoanNumberLabel),
-          DropdownButtonFormField<String>(
-            isExpanded: true,
-            initialValue: _loanNumber,
-            decoration: InputDecoration(
-              hintText: _customerId == null
-                  ? l10n.collectionsSelectCustomerFirstHint
-                  : l10n.collectionsSelectLoanHint,
-              isDense: true,
-            ),
-            items: availableLoans
-                .map((loan) => DropdownMenuItem(
-                    value: loan.loanNumber,
-                    child: Text(
-                      '${loan.loanNumber} • ${LoanRecord.formatRupees(loan.principalAmount)} • '
-                      '${friendlyCollectionTypeLabel(loan, l10n)}: ${LoanRecord.formatRupees(loan.emiAmount)} • '
-                      '${l10n.collectionsOutstandingAbbrev}: ${loan.formattedOutstandingWithPenalty} '
-                      '(${localizedStatusLabel(loan.status, l10n)})',
+              const SizedBox(height: 20),
+
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _label(l10n.collectionsPaymentMethodLabel),
+                        DropdownButtonFormField<String>(
+                          isExpanded: true,
+                          initialValue: _paymentMethod,
+                          icon: const Icon(Icons.payment_rounded,
+                              size: 20, color: AppColors.kTextMuted),
+                          decoration: _modernDecoration(hint: ''),
+                          items: _paymentMethods
+                              .map((m) => DropdownMenuItem(
+                                  value: m,
+                                  child: Text(
+                                      localizedPaymentMethodLabel(m, l10n))))
+                              .toList(),
+                          onChanged: (v) =>
+                              setState(() => _paymentMethod = v ?? 'Cash'),
+                        ),
+                      ],
                     ),
-                  ))
-                .toList(),
-            onChanged: _customerId == null
-                ? null
-                : (v) => setState(() {
-                    _loanNumber = v;
-                    _agent = _selectedLoan?.agentName;
-                  }),
-          ),
-          const SizedBox(height: 6),
-          Text(
-              selectedLoan == null
-                  ? l10n.collectionsSelectLoanPrompt
-                  : l10n.collectionsLoansLinkedCount(availableLoans.length),
-              style: const TextStyle(fontSize: 12, color: AppColors.kTextMuted)),
-          if (selectedLoan != null) ...[
-            const SizedBox(height: 12),
-            _buildLoanSummary(selectedLoan, l10n),
-            const SizedBox(height: 12),
-            _buildAmountPresets(selectedLoan, l10n),
-          ],
-          const SizedBox(height: 16),
-          _label(l10n.collectionsAmountReceivedLabel),
-          TextField(
-            controller: _amountController,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-                prefixText: '₹  ', hintText: '0', isDense: true),
-            onChanged: (_) => setState(() {}),
-          ),
-          const SizedBox(height: 16),
-          _label(l10n.collectionsPaymentMethodLabel),
-          DropdownButtonFormField<String>(
-            isExpanded: true,
-            initialValue: _paymentMethod,
-            decoration: const InputDecoration(isDense: true),
-            items: _paymentMethods
-                .map((m) => DropdownMenuItem(
-                    value: m, child: Text(localizedPaymentMethodLabel(m, l10n))))
-                .toList(),
-            onChanged: (v) => setState(() => _paymentMethod = v ?? 'Cash'),
-          ),
-          const SizedBox(height: 16),
-          _label(l10n.collectionsCollectionDateLabel),
-          TextField(
-            controller: _dateController,
-            readOnly: true,
-            onTap: _selectCollectionDate,
-            decoration: const InputDecoration(
-              isDense: true,
-              suffixIcon: Icon(Icons.calendar_today_outlined, size: 18),
-            ),
-          ),
-          const SizedBox(height: 16),
-          _label(l10n.collectionsColAgent),
-          DropdownButtonFormField<String>(
-            isExpanded: true,
-            initialValue: _agent,
-            decoration: InputDecoration(
-                hintText: l10n.collectionsSelectAgentHint, isDense: true),
-            items: {
-              ...widget.agents,
-              'Unassigned',
-              if (selectedLoan?.agentName.isNotEmpty == true)
-                selectedLoan!.agentName,
-            }
-                .map((a) => DropdownMenuItem(value: a, child: Text(a)))
-                .toList(),
-            onChanged: (v) => setState(() => _agent = v),
-          ),
-          const SizedBox(height: 16),
-          _label(l10n.collectionsNotesLabel),
-          TextField(
-            controller: _notesController,
-            maxLines: 3,
-            decoration: InputDecoration(
-                hintText: l10n.collectionsNotesHint, isDense: true),
-          ),
-          const SizedBox(height: 16),
-          _label(l10n.collectionsPaymentScreenshotLabel),
-          _UploadBox(
-            fileName: _screenshotFileName,
-            onTap: () => _pickFile(isSignature: false),
-          ),
-          const SizedBox(height: 16),
-          _label(l10n.collectionsCustomerSignatureLabel),
-          _UploadBox(
-            fileName: _signatureFileName,
-            accent: true,
-            onTap: () => _pickFile(isSignature: true),
-          ),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: Text(l10n.collectionsCancelButton),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _canSave ? _generateReceipt : null,
-                  icon: const Icon(Icons.description_outlined, size: 18),
-                  label: Text(l10n.collectionsReceiptButton),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.kSuccess,
                   ),
-                  onPressed: _canSave ? _save : null,
-                  icon: const Icon(Icons.check_circle_outline, size: 18),
-                  label: Text(_isEdit
-                      ? l10n.collectionsUpdateButton
-                      : l10n.collectionsSaveButton),
-                ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _label(l10n.collectionsCollectionDateLabel),
+                        TextField(
+                          controller: _dateController,
+                          readOnly: true,
+                          onTap: _selectCollectionDate,
+                          decoration: _modernDecoration(
+                            hint: '',
+                            iconData: Icons.calendar_month_rounded,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              _label(l10n.collectionsColAgent),
+              DropdownButtonFormField<String>(
+                isExpanded: true,
+                initialValue: _agent,
+                icon: const Icon(Icons.person_outline,
+                    color: AppColors.kTextMuted),
+                decoration:
+                    _modernDecoration(hint: l10n.collectionsSelectAgentHint),
+                items: {
+                  ...widget.agents,
+                  'Unassigned',
+                  if (selectedLoan?.agentName.isNotEmpty == true)
+                    selectedLoan!.agentName,
+                }
+                    .map((a) => DropdownMenuItem(value: a, child: Text(a)))
+                    .toList(),
+                onChanged: (v) => setState(() => _agent = v),
+              ),
+              const SizedBox(height: 16),
+
+              _label(l10n.collectionsNotesLabel),
+              TextField(
+                controller: _notesController,
+                maxLines: 3,
+                decoration: _modernDecoration(hint: l10n.collectionsNotesHint),
+              ),
+              const SizedBox(height: 20),
+
+              // Upload Boxes
+              _label(l10n.collectionsPaymentScreenshotLabel),
+              _UploadBox(
+                fileName: _screenshotFileName,
+                onTap: () => _pickFile(isSignature: false),
+              ),
+              const SizedBox(height: 16),
+
+              _label(l10n.collectionsCustomerSignatureLabel),
+              _UploadBox(
+                fileName: _signatureFileName,
+                accent: true,
+                onTap: () => _pickFile(isSignature: true),
+              ),
+              const SizedBox(height: 24),
+
+              // Actions sit at the end of the form and scroll with it.
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                        side: BorderSide(color: Colors.grey.shade300),
+                      ),
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: Text(l10n.collectionsCancelButton,
+                          style: const TextStyle(color: AppColors.kTextDark)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.kSuccess,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: _canSave ? _save : null,
+                      icon: const Icon(Icons.check_circle_outline, size: 20),
+                      label: Text(
+                        _isEdit
+                            ? l10n.collectionsUpdateButton
+                            : l10n.collectionsSaveButton,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }

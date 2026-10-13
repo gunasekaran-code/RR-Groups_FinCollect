@@ -22,6 +22,10 @@ abstract class Model
         'chit_passbook'      => ChitPassbook::class,
         'funds'              => Fund::class,
         'fund_payments'      => FundPayment::class,
+        // Read-only through rest.php — FundPayoutController refuses anything
+        // else. The Funds list needs every payout at once to know which cards
+        // still owe money; writing one is a transaction and lives in funds.php.
+        'fund_payouts'       => FundPayout::class,
         'handovers'          => Handover::class,
         'notifications'      => Notification::class,
         'settings'           => Setting::class,
@@ -40,6 +44,57 @@ abstract class Model
     {
         return static::$table;
     }
+
+    /**
+     * Columns a list read should not carry unless it asks for them by name.
+     *
+     * These are the base64 image columns — scanned Aadhaar cards, PAN cards,
+     * signatures, payment proofs. One of them is a few hundred kilobytes and
+     * that is fine; a hundred rows of them is fifty megabytes, and PHP needs
+     * that much again to turn it into JSON. On a shared host it exhausts
+     * memory_limit, and a memory exhaustion is a FATAL rather than an
+     * exception — so it slips past `Model::select`'s try/catch and past
+     * bootstrap's exception handler, and the browser gets a bare 500 with
+     * nothing in it to explain itself.
+     *
+     * That is not hypothetical: it took the live site down on every screen
+     * that loads customers, after months of documents being photographed at
+     * the door. Declaring them here means a table cannot quietly become too
+     * heavy to list.
+     *
+     * @return string[]
+     */
+    public static function heavyColumns(): array
+    {
+        return static::$heavy;
+    }
+
+    /** @var string[] */
+    protected static array $heavy = [];
+
+    /**
+     * Heavy columns worth reporting the *existence* of, without the contents.
+     *
+     * A list read cannot afford to carry a customer's photograph, but it can
+     * easily afford one byte saying whether there is one. Without that the
+     * client cannot tell "no picture" from "picture not fetched yet", so it
+     * asks for every avatar — and gets an error back for everyone whose photo
+     * has not been taken yet. Thirty of thirty-two customers here, which is a
+     * console full of red 404s describing something perfectly normal.
+     *
+     * Keyed by the heavy column, valued by the name the flag is returned
+     * under. Declared only where something reads it, so tables do not pay for
+     * flags nobody looks at.
+     *
+     * @return array<string,string>
+     */
+    public static function presenceFlags(): array
+    {
+        return static::$presence;
+    }
+
+    /** @var array<string,string> */
+    protected static array $presence = [];
 
     /** column name => MySQL type string (cached per table). */
     public static function columns(): array
@@ -123,12 +178,20 @@ abstract class Model
         return ' WHERE ' . $trimmed;
     }
 
-    /** SELECT with pre-built WHERE/ORDER/LIMIT fragments. Returns cast rows. */
-    public static function select(string $where, array $binds, string $order = '', string $limit = ''): array
+    /**
+     * SELECT with pre-built WHERE/ORDER/LIMIT fragments. Returns cast rows.
+     *
+     * `$columnList` comes from QueryParser::columnList, which only ever
+     * returns `*` or a backtick-quoted list of this table's real columns —
+     * nothing from the query string reaches here as SQL. It defaults to `*`
+     * so every existing caller keeps the behaviour it had.
+     */
+    public static function select(string $where, array $binds, string $order = '', string $limit = '', string $columnList = '*'): array
     {
         try {
             $whereSql = self::normalizeWhere($where);
-            $stmt = Database::pdo()->prepare("SELECT * FROM `" . static::$table . "`$whereSql$order$limit");
+            $select = $columnList === '' ? '*' : $columnList;
+            $stmt = Database::pdo()->prepare("SELECT $select FROM `" . static::$table . "`$whereSql$order$limit");
             $stmt->execute($binds);
             return static::castRows($stmt->fetchAll());
         } catch (\Throwable $e) {

@@ -1,6 +1,8 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 
+import '../services/session_service.dart';
+
 enum ToastType { success, warning, info, error }
 
 class _ToastStyle {
@@ -33,6 +35,14 @@ class ToastService {
   }) {
     final overlayState = navigatorKey.currentState?.overlay;
     if (overlayState == null) return;
+
+    // Toasts live in the navigator's overlay, so they outlive the screens that
+    // raise them. Once a token has been rejected the requests still unwinding
+    // from that dead session have nothing to tell the user, who is now looking
+    // at the login screen — stay quiet until they sign in again.
+    if (type == ToastType.error && SessionService.instance.sessionExpired) {
+      return;
+    }
 
     _currentState?.dismissImmediately();
     _current?.remove();

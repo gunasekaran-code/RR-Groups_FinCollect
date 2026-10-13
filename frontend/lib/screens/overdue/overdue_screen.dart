@@ -8,6 +8,7 @@ import '../../theme/confirm_dialog.dart';
 import '../../models/overdue.dart';
 import '../../services/overdue_api_service.dart';
 import '../../l10n/generated/app_localizations.dart';
+import '../../widgets/responsive_stat_grid.dart';
 
 String formatIndianCurrency(num value, {bool withSymbol = true}) {
   final isNegative = value < 0;
@@ -64,7 +65,7 @@ class _OverdueScreenState extends State<OverdueScreen> {
   final ScrollController _scrollController = ScrollController();
   final OverdueApiService _api = OverdueApiService();
 
-  String _filter = 'All overdue';
+  String _filter = 'All';
   List<OverdueAccount> _accounts = [];
   bool _isLoading = true;
   bool _isRefreshing = false;
@@ -112,19 +113,22 @@ class _OverdueScreenState extends State<OverdueScreen> {
     if (mounted) setState(() => _isRefreshing = false);
   }
 
-  List<OverdueAccount> get _filtered {
-    final query = _searchController.text.trim().toLowerCase();
-    return _accounts.where((a) {
-      final matchesQuery = query.isEmpty ||
-          a.customerName.toLowerCase().contains(query) ||
-          a.loanNumber.toLowerCase().contains(query);
-      final matchesFilter = switch (_filter) {
-        'Critical (>30d)' => a.isCritical,
-        _ => true,
-      };
-      return matchesQuery && matchesFilter;
-    }).toList();
-  }
+List<OverdueAccount> get _filtered {
+  final query = _searchController.text.trim().toLowerCase();
+  return _accounts.where((a) {
+    final matchesQuery = query.isEmpty ||
+        a.customerName.toLowerCase().contains(query) ||
+        a.loanNumber.toLowerCase().contains(query);
+    final matchesFilter = switch (_filter) {
+      '<7d' => a.daysOverdue < 7,
+      '<15d' => a.daysOverdue < 15,
+      '15-30d' => a.daysOverdue >= 15 && a.daysOverdue <= 30,
+      '>30d' => a.daysOverdue > 30,
+      _ => true,
+    };
+    return matchesQuery && matchesFilter;
+  }).toList();
+}
 
   double get _totalOverdueAmount =>
       _accounts.fold(0, (sum, a) => sum + a.overdueAmount);
@@ -361,13 +365,7 @@ class _OverdueScreenState extends State<OverdueScreen> {
           ),
         ),
         const SizedBox(height: 20),
-        GridView.count(
-          crossAxisCount: isWide ? 4 : 2,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 1.35,
+        ResponsiveStatGrid(
           children: [
             _StatCard(
               icon: Icons.error_outline_rounded,
@@ -422,23 +420,22 @@ class _OverdueScreenState extends State<OverdueScreen> {
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: AppColors.kBorder),
           ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: _filter,
-              isExpanded: true,
-              icon: const Icon(Icons.unfold_more_rounded,
-                  color: AppColors.kTextMuted),
-              style: const TextStyle(color: AppColors.kTextDark, fontSize: 15),
-              items: [
-                DropdownMenuItem(
-                    value: 'All overdue', child: Text(l10n.overdueFilterAll)),
-                DropdownMenuItem(
-                    value: 'Critical (>30d)',
-                    child: Text(l10n.overdueFilterCritical)),
-              ],
-              onChanged: (v) => setState(() => _filter = v ?? 'All overdue'),
-            ),
-          ),
+          child: Container(
+  padding: const EdgeInsets.all(4),
+  decoration: BoxDecoration(
+    color: AppColors.kBackground,
+    borderRadius: BorderRadius.circular(999),
+  ),
+  child: Row(
+    children: [
+      Expanded(child: _FilterChip(label: 'All', value: 'All', groupValue: _filter, onSelected: (v) => setState(() => _filter = v))),
+      Expanded(child: _FilterChip(label: '< 7d', value: '<7d', groupValue: _filter, onSelected: (v) => setState(() => _filter = v))),
+      Expanded(child: _FilterChip(label: '< 15d', value: '<15d', groupValue: _filter, onSelected: (v) => setState(() => _filter = v))),
+      Expanded(child: _FilterChip(label: '15–30d', value: '15-30d', groupValue: _filter, onSelected: (v) => setState(() => _filter = v))),
+      Expanded(child: _FilterChip(label: '> 30d', value: '>30d', groupValue: _filter, onSelected: (v) => setState(() => _filter = v))),
+    ],
+  ),
+),
         ),
         const SizedBox(height: 20),
         if (filtered.isEmpty)
@@ -464,6 +461,55 @@ class _OverdueScreenState extends State<OverdueScreen> {
             ),
           ),
       ],
+    );
+  }
+}
+
+class _FilterChip extends StatelessWidget {
+  const _FilterChip({
+    required this.label,
+    required this.value,
+    required this.groupValue,
+    required this.onSelected,
+  });
+
+  final String label;
+  final String value;
+  final String groupValue;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = value == groupValue;
+    return GestureDetector(
+      onTap: () => onSelected(value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        margin: const EdgeInsets.symmetric(horizontal: 2),
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? AppColors.kSurface : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.06),
+                    blurRadius: 6,
+                    offset: const Offset(0, 1),
+                  ),
+                ]
+              : null,
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            color: selected ? AppColors.kTextDark : AppColors.kTextMuted,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -507,6 +553,7 @@ class _StatCard extends StatelessWidget {
                   alignment: Alignment.centerLeft,
                   child: Text(
                     value,
+                    maxLines: 1,
                     style: const TextStyle(
                       color: AppColors.kTextDark,
                       fontSize: 20,

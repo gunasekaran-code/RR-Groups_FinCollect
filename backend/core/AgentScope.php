@@ -15,15 +15,18 @@
  * so it applies to every read through rest.php rather than being remembered
  * per screen.
  *
- * Two shapes of ownership:
+ * Three shapes of ownership:
  *
- *   OWNED    the record names its agent: loans, funds and chit groups all
- *            carry `assigned_agent`.
+ *   OWNED    the record names its agent: loans and funds carry `assigned_agent`.
  *
  *   DERIVED  the record hangs off one that does. A repayment instalment has no
  *            agent of its own; it belongs to whoever holds the loan. Scoping
  *            these through the parent is what stops the child table becoming
  *            the way around the parent's rule.
+ *
+ *   CHIT     the group follows the people in it. A chit group has no agent of
+ *            its own — it is visible to whoever handles one of its members'
+ *            customers, which is decided once when the customer is created.
  *
  * Because the clause is ANDed on last, a caller's own filter can only narrow
  * the result further. Asking for another agent's loan by id returns nothing
@@ -34,9 +37,66 @@ class AgentScope
 {
     /** table => the column naming the agent it belongs to. */
     private const OWNED = [
-        'loans'       => 'assigned_agent',
-        'funds'       => 'assigned_agent',
-        'chit_groups' => 'assigned_agent',
+        'loans' => 'assigned_agent',
+        'funds' => 'assigned_agent',
+    ];
+
+    /**
+     * The customers an agent may read.
+     *
+     * `customers` was the last table still trusting the browser: its docblock
+     * said "Read: any authenticated user (frontend scopes rows per role)", and
+     * a signed-in customer could pull the whole borrower directory — every
+     * name, mobile number, address, Aadhaar and PAN in the business. The React
+     * screens never showed it, which is exactly why nobody noticed; a request
+     * does not have to go through a screen.
+     *
+     * Assignment alone is too narrow, though. A loan or a fund names its own
+     * agent, and that does not have to be the customer's: reassigning a
+     * customer leaves the old agent still holding the loan, and they have to
+     * be able to read the name on it. So an agent sees their own customers
+     * plus the customers behind the work they hold — the same "own work"
+     * principle `collections` and `fund_payments` already use below.
+     */
+    private const CUSTOMERS_FOR_AGENT =
+        "`assigned_agent` = ?
+         OR `id` IN (SELECT `customer_id` FROM `loans` WHERE `assigned_agent` = ? AND `customer_id` IS NOT NULL)
+         OR `id` IN (SELECT `customer_id` FROM `funds` WHERE `assigned_agent` = ? AND `customer_id` IS NOT NULL)
+         OR `id` IN (SELECT `customer_id` FROM `chit_members` `cm`
+                      WHERE `cm`.`delflag` = 0 AND `cm`.`customer_id` IS NOT NULL
+                        AND `cm`.`group_id` IN (
+                              SELECT `m2`.`group_id` FROM `chit_members` `m2`
+                                JOIN `customers` `c2` ON `c2`.`id` = `m2`.`customer_id`
+                               WHERE `c2`.`assigned_agent` = ? AND `m2`.`delflag` = 0 AND `c2`.`delflag` = 0))";
+
+    /**
+     * The chit groups an agent can see: the ones holding a member who is one
+     * of their customers.
+     *
+     * Chit groups briefly carried an `assigned_agent` of their own, which meant
+     * the same agent had to be named twice — once on the customer and again on
+     * every group they joined — and the two could disagree. A customer already
+     * names their agent when they are created, and a chit member already names
+     * their customer, so the group follows the people in it. Nothing to keep in
+     * step, and nothing to forget to set.
+     *
+     * A member with no customer record belongs to nobody and stays admin-only,
+     * which is the safe direction: an unlinked row is a gap in the data, not a
+     * reason to widen who can read it.
+     */
+    private const CHIT_GROUPS_FOR_AGENT =
+        "SELECT `m`.`group_id` FROM `chit_members` `m`
+           JOIN `customers` `c` ON `c`.`id` = `m`.`customer_id`
+          WHERE `c`.`assigned_agent` = ? AND `m`.`delflag` = 0 AND `c`.`delflag` = 0";
+
+    /** Chit tables, and the column each one joins back to the group by. */
+    private const CHIT = [
+        'chit_groups'    => 'id',
+        'chit_members'   => 'group_id',
+        'chit_schedules' => 'group_id',
+        'chit_passbook'  => 'group_id',
+        'chit_payments'  => 'group_id',
+        'chit_auctions'  => 'group_id',
     ];
 
     /**
@@ -52,23 +112,20 @@ class AgentScope
      * agent they owe less than they are holding.
      *
      * Chit contributions are deliberately not given that clause: no screen
-     * settles chit cash by agent, so the group's assignment is the whole rule.
+     * settles chit cash by agent, so group visibility is the whole rule.
      */
     private const DERIVED = [
         'repayment_schedule' => ['loan_id',  'loans',       null],
         'collections'        => ['loan_id',  'loans',       'agent_id'],
         'fund_payments'      => ['fund_id',  'funds',       'agent_id'],
-        'chit_members'       => ['group_id', 'chit_groups', null],
-        'chit_schedules'     => ['group_id', 'chit_groups', null],
-        'chit_passbook'      => ['group_id', 'chit_groups', null],
-        'chit_payments'      => ['group_id', 'chit_groups', null],
-        'chit_auctions'      => ['group_id', 'chit_groups', null],
+        'fund_payouts'       => ['fund_id',  'funds',       'agent_id'],
     ];
 
     /** True when this table has a rule at all. */
     public static function covers(string $table): bool
     {
-        return isset(self::OWNED[$table]) || isset(self::DERIVED[$table]);
+        return $table === 'customers'
+            || isset(self::OWNED[$table]) || isset(self::DERIVED[$table]) || isset(self::CHIT[$table]);
     }
 
     /**
@@ -82,9 +139,23 @@ class AgentScope
     {
         if ($role !== 'agent' || !$userId) return;
 
+        if ($table === 'customers') {
+            QueryParser::addScope(
+                '(' . self::CUSTOMERS_FOR_AGENT . ')',
+                [$userId, $userId, $userId, $userId]
+            );
+            return;
+        }
+
         if (isset(self::OWNED[$table])) {
             $col = self::OWNED[$table];
             QueryParser::addScope("`$col` = ?", [$userId]);
+            return;
+        }
+
+        if (isset(self::CHIT[$table])) {
+            $col = self::CHIT[$table];
+            QueryParser::addScope("`$col` IN (" . self::CHIT_GROUPS_FOR_AGENT . ")", [$userId]);
             return;
         }
 

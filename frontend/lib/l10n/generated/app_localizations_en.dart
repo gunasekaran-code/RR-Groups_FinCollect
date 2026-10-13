@@ -520,6 +520,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get dashboardStatPendingApprovals => 'Pending Approvals';
 
   @override
+  String get dashboardStatActiveCustomers => 'Inactive Customers';
+
+  @override
   String get dashboardStatTotalLoanAmount => 'Total Loan Amount';
 
   @override
@@ -1449,6 +1452,28 @@ class AppLocalizationsEn extends AppLocalizations {
   String get collectionsSelectCustomerHint => 'Select customer';
 
   @override
+  String get collectionsCustomerSearchHint =>
+      'Search by name, mobile, customer ID or loan no';
+
+  @override
+  String get collectionsCustomerNoMatches => 'No matching customers';
+
+  @override
+  String collectionsCustomerLoanCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count loans',
+      one: '1 loan',
+      zero: 'No loans',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get collectionsChangeCustomer => 'Change';
+
+  @override
   String get collectionsLoanNumberLabel => 'LOAN NUMBER';
 
   @override
@@ -1574,11 +1599,19 @@ class AppLocalizationsEn extends AppLocalizations {
   String get collectionsPresetFullBalance => 'Full Balance';
 
   @override
+  String get collectionsPresetPenalty => 'Penalty';
+
+  @override
   String get collectionsPurposeMonthlyInterest => 'Monthly Interest Payment';
 
   @override
   String collectionsPaymentSummaryLine(String payment, String remaining) {
     return 'Payment: $payment • Remaining balance: $remaining';
+  }
+
+  @override
+  String collectionsPenaltySummaryLine(String payment, String remaining) {
+    return 'Penalty paid: $payment • Penalty balance: $remaining';
   }
 
   @override
@@ -2357,6 +2390,72 @@ class AppLocalizationsEn extends AppLocalizations {
       'Weekly-deposit savings schemes with a maturity bonus';
 
   @override
+  String get fundColFundNo => 'Fund No.';
+
+  @override
+  String get fundColWeekly => 'Weekly';
+
+  @override
+  String get fundColWeeks => 'Weeks';
+
+  @override
+  String get fundColBonus => 'Bonus';
+
+  @override
+  String get fundColDeposited => 'Deposited';
+
+  @override
+  String get fundColPayout => 'Payout';
+
+  @override
+  String get fundColMaturity => 'Maturity';
+
+  @override
+  String get fundStatusActive => 'Active';
+
+  @override
+  String get fundStatusMatured => 'Matured';
+
+  @override
+  String get fundStatusClosed => 'Closed';
+
+  @override
+  String get chitColGroupNo => 'Group No.';
+
+  @override
+  String get chitColGroupName => 'Group Name';
+
+  @override
+  String get chitColMonthly => 'Monthly';
+
+  @override
+  String get chitColCollected => 'Collected';
+
+  @override
+  String get chitColStartDate => 'Start Date';
+
+  @override
+  String get chitColStatus => 'Status';
+
+  @override
+  String get chitColActions => 'Actions';
+
+  @override
+  String get chitColGroupValue => 'Group Value';
+
+  @override
+  String get chitStatusActive => 'Active';
+
+  @override
+  String get chitStatusCompleted => 'Completed';
+
+  @override
+  String get chitStatusUpcoming => 'Upcoming';
+
+  @override
+  String get chitActionEdit => 'Edit';
+
+  @override
   String get fundCreateButton => 'Create Fund';
 
   @override
@@ -2402,6 +2501,22 @@ class AppLocalizationsEn extends AppLocalizations {
   String get fundCardMaturityPayout => 'Maturity payout';
 
   @override
+  String get fundCardMaturityPayoutPending => 'Maturity payout (on completion)';
+
+  @override
+  String get fundCardClosurePayout => 'Closure payout (no bonus)';
+
+  @override
+  String fundCardPaidOut(String date) {
+    return 'Paid out · $date';
+  }
+
+  @override
+  String fundCardPayOutButton(String amount) {
+    return 'Pay Out · $amount';
+  }
+
+  @override
   String fundCardDepositedProgress(String deposited, String total) {
     return 'Deposited $deposited / $total';
   }
@@ -2414,7 +2529,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String fundCardSettleBanner(String amount) {
-    return 'Settle in full · $amount left';
+    return 'Close & settle · $amount short';
   }
 
   @override
@@ -2684,6 +2799,24 @@ class AppLocalizationsEn extends AppLocalizations {
   String get fundSettleSummaryPayoutToCustomer => 'Payout to customer';
 
   @override
+  String get fundSettleClosedPayoutSubtitleNoBonus =>
+      'Deposits back — no bonus';
+
+  @override
+  String get fundSettleSummaryDepositsReceived => 'Deposits received';
+
+  @override
+  String fundSettleSummaryBonusNotEarned(String amount) {
+    return 'not earned — $amount short of the full term';
+  }
+
+  @override
+  String fundSettleClosureHelper(String units, String maxUnits, String amount,
+      String remaining, String weekly) {
+    return 'Closing $units of $maxUnits units pays $amount out now — Cash In Hand drops by that amount. The remaining $remaining units keep collecting at $weekly a week.';
+  }
+
+  @override
   String get fundSettleFailedTitle => 'Closure failed';
 
   @override
@@ -2723,10 +2856,26 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get fundPassbookSummaryBonus => '🎁 Maturity bonus (at settlement)';
+  String get fundPassbookSummaryBonus => '🎁 Maturity bonus';
 
   @override
   String get fundPassbookSummaryPayout => 'Maturity payout';
+
+  @override
+  String get fundPassbookSummaryPayableNow => 'Payable now';
+
+  @override
+  String fundPassbookSummaryPaidOut(String date) {
+    return 'Paid out · $date';
+  }
+
+  @override
+  String get fundPassbookBonusNotEarned => 'not earned — closed early';
+
+  @override
+  String fundPassbookPaidOutVia(String method, String date) {
+    return '$method · $date';
+  }
 
   @override
   String get fundPassbookNextDuePrefix => 'Next deposit due · ';
@@ -3761,4 +3910,132 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get addMemberFailedTitle => 'Add member failed';
+
+  @override
+  String get custDashTitle => 'My Dashboard';
+
+  @override
+  String get custDashGoodMorning => 'Good morning';
+
+  @override
+  String get custDashGoodAfternoon => 'Good afternoon';
+
+  @override
+  String get custDashGoodEvening => 'Good evening';
+
+  @override
+  String custDashGreeting(String greeting, String name) {
+    return '$greeting, $name';
+  }
+
+  @override
+  String custDashNextInstallment(String amount, String date) {
+    return 'Your next installment of $amount is due on $date.';
+  }
+
+  @override
+  String get custDashViewMyLoans => 'View My Loans';
+
+  @override
+  String get custDashActiveLoans => 'Active Loans';
+
+  @override
+  String get custDashOutstanding => 'Outstanding';
+
+  @override
+  String get custDashPenalty => 'Penalty';
+
+  @override
+  String get custDashTotalOutstanding => 'Total Outstanding';
+
+  @override
+  String get custDashNextEmi => 'Next EMI';
+
+  @override
+  String get custDashTotalPaid => 'Total Paid';
+
+  @override
+  String get custDashPaid => 'Paid';
+
+  @override
+  String get custDashBalance => 'Balance';
+
+  @override
+  String get custDashPending => 'Pending';
+
+  @override
+  String get custDashTotal => 'Total';
+
+  @override
+  String get custDashRepaymentProgress => 'Repayment Progress';
+
+  @override
+  String get custDashRepaymentProgressSub => 'Paid vs balance to repay';
+
+  @override
+  String get custDashInstallmentStatus => 'Installment Status';
+
+  @override
+  String get custDashInstallmentStatusSub => 'Across your schedule';
+
+  @override
+  String get custDashMyLoans => 'My Loans';
+
+  @override
+  String get custDashMyLoansSub => 'All your loan accounts';
+
+  @override
+  String get custDashViewAll => 'View all';
+
+  @override
+  String get custDashNoLoans => 'You have no loans yet.';
+
+  @override
+  String custDashEmiAmount(String amount) {
+    return 'EMI $amount';
+  }
+
+  @override
+  String get custDashUpcoming => 'Upcoming Installments';
+
+  @override
+  String get custDashUpcomingSub => 'Next payments due';
+
+  @override
+  String get custDashFullSchedule => 'Full schedule';
+
+  @override
+  String get custDashNoUpcoming => 'No upcoming installments.';
+
+  @override
+  String custDashDueOn(String date) {
+    return 'Due $date';
+  }
+
+  @override
+  String get custDashRecentPayments => 'Recent Payments';
+
+  @override
+  String get custDashRecentPaymentsSub => 'Your payment history';
+
+  @override
+  String get custDashNoPayments => 'No payments recorded yet.';
+
+  @override
+  String get custDashStatusActive => 'Active';
+
+  @override
+  String get custDashStatusClosed => 'Closed';
+
+  @override
+  String get custDashStatusOverdue => 'Overdue';
+
+  @override
+  String get custDashStatusPending => 'Pending';
+
+  @override
+  String get custDashStatusPartial => 'Partial';
+
+  @override
+  String get custDashStatusPaid => 'Paid';
 }

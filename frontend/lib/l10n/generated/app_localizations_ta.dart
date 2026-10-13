@@ -531,6 +531,9 @@ class AppLocalizationsTa extends AppLocalizations {
   String get dashboardStatPendingApprovals => 'நிலுவையிலுள்ள ஒப்புதல்கள்';
 
   @override
+  String get dashboardStatActiveCustomers => 'செயலில் உள்ள வாடிக்கையாளர்கள்';
+
+  @override
   String get dashboardStatTotalLoanAmount => 'மொத்த கடன் தொகை';
 
   @override
@@ -1502,6 +1505,29 @@ class AppLocalizationsTa extends AppLocalizations {
       'வாடிக்கையாளரைத் தேர்வு செய்யவும்';
 
   @override
+  String get collectionsCustomerSearchHint =>
+      'பெயர், மொபைல், வாடிக்கையாளர் ஐடி அல்லது கடன் எண் மூலம் தேடவும்';
+
+  @override
+  String get collectionsCustomerNoMatches =>
+      'பொருந்தும் வாடிக்கையாளர்கள் இல்லை';
+
+  @override
+  String collectionsCustomerLoanCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count கடன்கள்',
+      one: '1 கடன்',
+      zero: 'கடன் இல்லை',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get collectionsChangeCustomer => 'மாற்று';
+
+  @override
   String get collectionsLoanNumberLabel => 'கடன் எண்';
 
   @override
@@ -1631,11 +1657,19 @@ class AppLocalizationsTa extends AppLocalizations {
   String get collectionsPresetFullBalance => 'முழு இருப்பு';
 
   @override
+  String get collectionsPresetPenalty => 'அபராதம்';
+
+  @override
   String get collectionsPurposeMonthlyInterest => 'மாதாந்திர வட்டி செலுத்துதல்';
 
   @override
   String collectionsPaymentSummaryLine(String payment, String remaining) {
     return 'செலுத்துதல்: $payment • மீதமுள்ள இருப்பு: $remaining';
+  }
+
+  @override
+  String collectionsPenaltySummaryLine(String payment, String remaining) {
+    return 'செலுத்திய அபராதம்: $payment • மீதமுள்ள அபராதம்: $remaining';
   }
 
   @override
@@ -2442,6 +2476,72 @@ class AppLocalizationsTa extends AppLocalizations {
       'முதிர்வு போனஸுடன் கூடிய வாராந்திர வைப்பு சேமிப்புத் திட்டங்கள்';
 
   @override
+  String get fundColFundNo => 'நிதி எண்';
+
+  @override
+  String get fundColWeekly => 'வாராந்திரம்';
+
+  @override
+  String get fundColWeeks => 'வாரங்கள்';
+
+  @override
+  String get fundColBonus => 'போனஸ்';
+
+  @override
+  String get fundColDeposited => 'செலுத்தியது';
+
+  @override
+  String get fundColPayout => 'வழங்கல்';
+
+  @override
+  String get fundColMaturity => 'முதிர்வு';
+
+  @override
+  String get fundStatusActive => 'செயலில்';
+
+  @override
+  String get fundStatusMatured => 'முதிர்ந்தது';
+
+  @override
+  String get fundStatusClosed => 'மூடப்பட்டது';
+
+  @override
+  String get chitColGroupNo => 'குழு எண்';
+
+  @override
+  String get chitColGroupName => 'குழு பெயர்';
+
+  @override
+  String get chitColMonthly => 'மாதாந்திரம்';
+
+  @override
+  String get chitColCollected => 'வசூலானது';
+
+  @override
+  String get chitColStartDate => 'தொடக்க தேதி';
+
+  @override
+  String get chitColStatus => 'நிலை';
+
+  @override
+  String get chitColActions => 'செயல்கள்';
+
+  @override
+  String get chitColGroupValue => 'குழு மதிப்பு';
+
+  @override
+  String get chitStatusActive => 'செயலில்';
+
+  @override
+  String get chitStatusCompleted => 'முடிந்தது';
+
+  @override
+  String get chitStatusUpcoming => 'வரவிருக்கிறது';
+
+  @override
+  String get chitActionEdit => 'திருத்து';
+
+  @override
   String get fundCreateButton => 'நிதியை உருவாக்கு';
 
   @override
@@ -2488,6 +2588,22 @@ class AppLocalizationsTa extends AppLocalizations {
   String get fundCardMaturityPayout => 'முதிர்வுத் தொகை';
 
   @override
+  String get fundCardMaturityPayoutPending => 'முதிர்வுத் தொகை (நிறைவின் போது)';
+
+  @override
+  String get fundCardClosurePayout => 'நிறைவுத் தொகை (போனஸ் இல்லை)';
+
+  @override
+  String fundCardPaidOut(String date) {
+    return 'வழங்கப்பட்டது · $date';
+  }
+
+  @override
+  String fundCardPayOutButton(String amount) {
+    return 'வழங்கு · $amount';
+  }
+
+  @override
   String fundCardDepositedProgress(String deposited, String total) {
     return '$deposited / $total செலுத்தப்பட்டது';
   }
@@ -2500,7 +2616,7 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String fundCardSettleBanner(String amount) {
-    return 'முழுமையாகத் தீர்க்கவும் · $amount மீதமுள்ளது';
+    return 'மூடித் தீர்க்கவும் · $amount மீதம்';
   }
 
   @override
@@ -2774,6 +2890,24 @@ class AppLocalizationsTa extends AppLocalizations {
   String get fundSettleSummaryPayoutToCustomer => 'வாடிக்கையாளருக்கு செலுத்தம்';
 
   @override
+  String get fundSettleClosedPayoutSubtitleNoBonus =>
+      'வைப்புத்தொகை திருப்பி நல்கப்படுகிறது — போனஸ் இல்லை';
+
+  @override
+  String get fundSettleSummaryDepositsReceived => 'பெறப்பட்ட வைப்புத்தொகை';
+
+  @override
+  String fundSettleSummaryBonusNotEarned(String amount) {
+    return 'கிடைக்கவில்லை — முழு காலத்திற்கு $amount குறைவாக உள்ளது';
+  }
+
+  @override
+  String fundSettleClosureHelper(String units, String maxUnits, String amount,
+      String remaining, String weekly) {
+    return '$maxUnits அலகுகளில் $units அலகுகளை மூடுவது இப்போதே $amount செலுத்துகிறது — கையிருப்பு பணம் அந்த அளவு குறைகிறது. மீதமுள்ள $remaining அலகுகள் வாரத்திற்கு $weekly வீதம் தொடர்ந்து வசூலாகும்.';
+  }
+
+  @override
   String get fundSettleFailedTitle => 'மூடல் தோல்வியடைந்தது';
 
   @override
@@ -2813,11 +2947,27 @@ class AppLocalizationsTa extends AppLocalizations {
   }
 
   @override
-  String get fundPassbookSummaryBonus =>
-      '🎁 முதிர்வு போனஸ் (தீர்வு செய்யும் போது)';
+  String get fundPassbookSummaryBonus => '🎁 முதிர்வு போனஸ்';
 
   @override
   String get fundPassbookSummaryPayout => 'முதிர்வு செலுத்தம்';
+
+  @override
+  String get fundPassbookSummaryPayableNow => 'இப்போது செலுத்த வேண்டியது';
+
+  @override
+  String fundPassbookSummaryPaidOut(String date) {
+    return 'வழங்கப்பட்டது · $date';
+  }
+
+  @override
+  String get fundPassbookBonusNotEarned =>
+      'பெறப்படவில்லை — முன்கூட்டியே மூடப்பட்டது';
+
+  @override
+  String fundPassbookPaidOutVia(String method, String date) {
+    return '$method · $date';
+  }
 
   @override
   String get fundPassbookNextDuePrefix => 'அடுத்த வைப்புத்தொகை தேதி · ';
@@ -3871,4 +4021,134 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get addMemberFailedTitle => 'Add member failed';
+
+  @override
+  String get custDashTitle => 'எனது டாஷ்போர்டு';
+
+  @override
+  String get custDashGoodMorning => 'காலை வணக்கம்';
+
+  @override
+  String get custDashGoodAfternoon => 'மதிய வணக்கம்';
+
+  @override
+  String get custDashGoodEvening => 'மாலை வணக்கம்';
+
+  @override
+  String custDashGreeting(String greeting, String name) {
+    return '$greeting, $name';
+  }
+
+  @override
+  String custDashNextInstallment(String amount, String date) {
+    return 'உங்கள் அடுத்த தவணை $amount, $date அன்று செலுத்த வேண்டும்.';
+  }
+
+  @override
+  String get custDashViewMyLoans => 'எனது கடன்களைக் காண்க';
+
+  @override
+  String get custDashActiveLoans => 'செயலில் உள்ள கடன்கள்';
+
+  @override
+  String get custDashOutstanding => 'நிலுவைத் தொகை';
+
+  @override
+  String get custDashPenalty => 'அபராதம்';
+
+  @override
+  String get custDashTotalOutstanding => 'மொத்த நிலுவை';
+
+  @override
+  String get custDashNextEmi => 'அடுத்த EMI';
+
+  @override
+  String get custDashTotalPaid => 'மொத்தம் செலுத்தியது';
+
+  @override
+  String get custDashPaid => 'செலுத்தப்பட்டது';
+
+  @override
+  String get custDashBalance => 'மீதி';
+
+  @override
+  String get custDashPending => 'நிலுவையில்';
+
+  @override
+  String get custDashTotal => 'மொத்தம்';
+
+  @override
+  String get custDashRepaymentProgress => 'திருப்பிச் செலுத்தும் முன்னேற்றம்';
+
+  @override
+  String get custDashRepaymentProgressSub =>
+      'செலுத்தியது vs செலுத்த வேண்டிய மீதி';
+
+  @override
+  String get custDashInstallmentStatus => 'தவணை நிலை';
+
+  @override
+  String get custDashInstallmentStatusSub => 'உங்கள் முழு அட்டவணையில்';
+
+  @override
+  String get custDashMyLoans => 'எனது கடன்கள்';
+
+  @override
+  String get custDashMyLoansSub => 'உங்கள் அனைத்து கடன் கணக்குகள்';
+
+  @override
+  String get custDashViewAll => 'அனைத்தையும் காண்க';
+
+  @override
+  String get custDashNoLoans => 'உங்களுக்கு இன்னும் கடன்கள் இல்லை.';
+
+  @override
+  String custDashEmiAmount(String amount) {
+    return 'EMI $amount';
+  }
+
+  @override
+  String get custDashUpcoming => 'வரவிருக்கும் தவணைகள்';
+
+  @override
+  String get custDashUpcomingSub => 'அடுத்து செலுத்த வேண்டியவை';
+
+  @override
+  String get custDashFullSchedule => 'முழு அட்டவணை';
+
+  @override
+  String get custDashNoUpcoming => 'வரவிருக்கும் தவணைகள் இல்லை.';
+
+  @override
+  String custDashDueOn(String date) {
+    return 'செலுத்த வேண்டியது $date';
+  }
+
+  @override
+  String get custDashRecentPayments => 'சமீபத்திய கொடுப்பனவுகள்';
+
+  @override
+  String get custDashRecentPaymentsSub => 'உங்கள் கட்டண வரலாறு';
+
+  @override
+  String get custDashNoPayments =>
+      'இதுவரை கொடுப்பனவுகள் பதிவு செய்யப்படவில்லை.';
+
+  @override
+  String get custDashStatusActive => 'செயலில்';
+
+  @override
+  String get custDashStatusClosed => 'மூடப்பட்டது';
+
+  @override
+  String get custDashStatusOverdue => 'காலாவதியானது';
+
+  @override
+  String get custDashStatusPending => 'நிலுவையில்';
+
+  @override
+  String get custDashStatusPartial => 'பகுதி';
+
+  @override
+  String get custDashStatusPaid => 'செலுத்தப்பட்டது';
 }

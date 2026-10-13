@@ -9,11 +9,16 @@ import 'package:flutter/services.dart';
 import '../../widgets/page_header.dart';
 import '../../theme/confirm_dialog.dart';
 import '../../services/photo_service.dart';
+import '../../widgets/app_upload.dart';
 import '../../services/location_service.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../services/customer_api_service.dart';
 import '../../services/session_service.dart';
 import '../../models/user_role.dart';
 import '../agent/agent_page.dart' show StatCard;
+import 'customer_documents_download.dart';
+import '../../widgets/responsive_stat_grid.dart';
+import '../../widgets/phone_numbers_field.dart';
 
 // ---------------------------------------------------------
 // Shared helpers for decoding & rendering stored photos.
@@ -176,28 +181,30 @@ class _CustomersScreenState extends State<CustomersScreen> {
     }
   }
 
+  /// Customer details open as their own page inside the app shell: a back
+  /// arrow in place of the drawer, with the bottom navbar still available.
   void _viewCustomer(Customer c) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.4),
-      builder: (context) => Padding(
-        padding:
-            EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-        child: Container(
-          decoration: const BoxDecoration(
+    final details = _api.fetchById(c.id);
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AppShell(
+          currentRoute: AppRoutes.customers,
+          title: 'Customer Details',
+          showBackButton: true,
+          body: Container(
             color: AppColors.kSurface,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black12, blurRadius: 20, offset: Offset(0, -4))
-            ],
-          ),
-          child: SafeArea(
-            top: false,
             child: SingleChildScrollView(
-                child: _CustomerViewSheet(customer: c, agents: _agents)),
+              child: _CustomerViewSheet(
+                customer: c,
+                details: details,
+                api: _api,
+                agents: _agents,
+                onPhotoChanged: () {
+                  _CustomerAvatar._cache.remove(c.id);
+                  _loadCustomers();
+                },
+              ),
+            ),
           ),
         ),
       ),
@@ -234,28 +241,54 @@ class _CustomersScreenState extends State<CustomersScreen> {
     }
   }
 
+  /// Opens the edit form on the customer's full record. The list row has no
+  /// KYC images (the list endpoint leaves them out), and the form writes back
+  /// every image field it holds — opened on the list row, a save would blank
+  /// the customer's photo and documents. So the form only opens once the
+  /// full record has arrived.
+  bool _openingEdit = false;
+  Future<void> _editCustomer(Customer c) async {
+    if (_openingEdit) return;
+    _openingEdit = true;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+    Customer? full;
+    String? error;
+    try {
+      full = await _api.fetchById(c.id);
+    } catch (e) {
+      error = e.toString();
+    }
+    _openingEdit = false;
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop();
+    if (full == null) {
+      ToastService.show(
+        title: 'Failed to Load Customer',
+        message: error ?? 'Customer not found',
+        type: ToastType.error,
+      );
+      return;
+    }
+    _showCustomerFormModal(existingCustomer: full);
+  }
+
+  /// The add/edit form opens as its own page inside the app shell, like the
+  /// details page: back arrow instead of the drawer, bottom navbar kept.
   void _showCustomerFormModal({Customer? existingCustomer}) {
     final isEditing = existingCustomer != null;
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.4),
-      builder: (context) => Padding(
-        padding:
-            EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-        child: Container(
-          decoration: const BoxDecoration(
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (pageContext) => AppShell(
+          currentRoute: AppRoutes.customers,
+          title: isEditing ? 'Edit Customer' : 'Add Customer',
+          showBackButton: true,
+          body: Container(
             color: AppColors.kSurface,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black12, blurRadius: 20, offset: Offset(0, -4))
-            ],
-          ),
-          child: SafeArea(
-            top: false,
             child: SingleChildScrollView(
               child: _CustomerForm(
                 initialData: existingCustomer,
@@ -263,6 +296,8 @@ class _CustomersScreenState extends State<CustomersScreen> {
                 onSave: (updated, email, password) async {
                   try {
                     if (isEditing) {
+                      // Its photo may have changed; refetch on reload.
+                      _CustomerAvatar._cache.remove(existingCustomer.id);
                       await _api.update(
                         existingCustomer.id,
                         updated,
@@ -275,8 +310,8 @@ class _CustomersScreenState extends State<CustomersScreen> {
                     }
                     if (!mounted) return;
                     await _loadCustomers();
-                    if (!mounted) return;
-                    Navigator.pop(context);
+                    if (!mounted || !pageContext.mounted) return;
+                    Navigator.pop(pageContext);
                     ToastService.show(
                       title: isEditing ? 'Customer Updated' : 'Customer Added',
                       message: isEditing
@@ -332,13 +367,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
       ),
     ];
 
-    return GridView.count(
-      crossAxisCount: isNarrow ? 2 : 4,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 12,
-      crossAxisSpacing: isNarrow ? 12 : 16,
-      childAspectRatio: isNarrow ? 1.3 : 1.7,
+    return ResponsiveStatGrid(
       children: cards,
     );
   }
@@ -476,7 +505,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
                       statusLabel: _statusLabel(c.loanStatus),
                       agents: _agents,
                       onView: () => _viewCustomer(c),
-                      onEdit: () => _showCustomerFormModal(existingCustomer: c),
+                      onEdit: () => _editCustomer(c),
                       onDelete: _isAgent ? null : () => _deleteCustomer(c),
                     );
                   },
@@ -493,10 +522,71 @@ class _CustomersScreenState extends State<CustomersScreen> {
 // CUSTOMER VIEW SHEET
 // ---------------------------------------------------------
 
-class _CustomerViewSheet extends StatelessWidget {
+class _CustomerViewSheet extends StatefulWidget {
+  /// The row from the list, shown straight away. It lacks the KYC images
+  /// (the list endpoint leaves them out), which [details] fills in.
   final Customer customer;
+
+  /// The full record for this customer, fetched when the sheet opens.
+  final Future<Customer> details;
   final List<AgentOption> agents;
-  const _CustomerViewSheet({required this.customer, this.agents = const []});
+
+  /// Writes a replaced document back to the customer record.
+  final CustomerApiService api;
+
+  /// Called after the profile photo is replaced, so the list's avatar can
+  /// refresh.
+  final VoidCallback? onPhotoChanged;
+  const _CustomerViewSheet({
+    required this.customer,
+    required this.details,
+    required this.api,
+    this.agents = const [],
+    this.onPhotoChanged,
+  });
+
+  @override
+  State<_CustomerViewSheet> createState() => _CustomerViewSheetState();
+}
+
+class _CustomerViewSheetState extends State<_CustomerViewSheet> {
+  late Customer customer = widget.customer;
+  bool _loading = true;
+  /// Label of the document being saved, so only its card shows a spinner.
+  String? _savingDoc;
+
+  /// Label of the document being uploaded.
+  String? _updatingDoc;
+
+  /// rest.php lets admins and agents write the KYC document columns;
+  /// customers cannot write customer records at all.
+  bool get _canUpdateDocs {
+    final role = SessionService.instance.currentUser?.role;
+    return role == UserRole.admin ||
+        role == UserRole.owner ||
+        role == UserRole.agent;
+  }
+  String? _error;
+
+  List<AgentOption> get agents => widget.agents;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.details.then((full) {
+      if (!mounted) return;
+      setState(() {
+        customer = full;
+        _loading = false;
+      });
+    }).catchError((Object e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    });
+  }
 
   /// The customer's assigned-agent id resolved to a display name. The
   /// customers list endpoint only returns the raw `assigned_agent` uuid, so
@@ -510,6 +600,41 @@ class _CustomerViewSheet extends StatelessWidget {
       }
     }
     return customer.assignedAgentName ?? customer.assignedAgent;
+  }
+
+  /// Saves one document as a JPEG: into the gallery on a phone, as a
+  /// browser download on web.
+  Future<void> _downloadDocument(_DocEntry doc) async {
+    if (_savingDoc != null) return;
+    setState(() => _savingDoc = doc.label);
+    try {
+      final saved = await downloadDocumentAsJpeg(
+        customerCode: customer.customerId,
+        label: doc.label,
+        data: doc.data,
+      );
+      ToastService.show(
+        title: saved == null ? 'Download Failed' : '${doc.label} Downloaded',
+        message: switch (saved) {
+          null => 'This image could not be read.',
+          (DocumentSavedTo.gallery, _) =>
+            'Saved as JPEG to the "$customerDocumentsAlbum" album in your '
+                'gallery.',
+          (DocumentSavedTo.browser, _) =>
+            'Saved as JPEG to your Downloads folder.',
+          (DocumentSavedTo.folder, final path) => 'Saved as JPEG to $path',
+        },
+        type: saved == null ? ToastType.error : ToastType.success,
+      );
+    } catch (e) {
+      ToastService.show(
+        title: 'Download Failed',
+        message: e.toString().replaceFirst('Exception: ', ''),
+        type: ToastType.error,
+      );
+    } finally {
+      if (mounted) setState(() => _savingDoc = null);
+    }
   }
 
   @override
@@ -532,41 +657,36 @@ class _CustomerViewSheet extends StatelessWidget {
                       color: AppColors.kTextDark),
                 ),
               ),
-              IconButton(
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                icon: const Icon(Icons.close, color: AppColors.kTextMuted),
-                onPressed: () => Navigator.pop(context),
-              ),
             ],
           ),
+          if (_loading) ...[
+            const SizedBox(height: 12),
+            const LinearProgressIndicator(minHeight: 2),
+          ],
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              'Could not load full details: $_error',
+              style: const TextStyle(fontSize: 12, color: AppColors.kDanger),
+            ),
+          ],
           const SizedBox(height: 24),
           _buildViewField('Customer ID', customer.customerId),
           _buildViewField('Mobile Number', customer.mobile),
+          if (customer.altMobiles.isNotEmpty)
+            _buildViewField(
+                'Alternate Numbers', customer.altMobiles.join(', ')),
           _buildViewField('Address', customer.address),
           _buildViewField('Aadhaar Number', customer.aadhaar),
           _buildViewField('PAN Number', customer.pan),
           _buildViewField('Occupation', customer.occupation),
+          _buildViewField('Login Email', customer.email),
           _buildViewField('Assigned Agent', _assignedAgentLabel),
           _buildViewField('Loan Status', customer.loanStatus),
           const SizedBox(height: 8),
           _sectionLabel(Icons.image_outlined, 'Documents & Photos'),
           const SizedBox(height: 12),
           _buildDocumentsGrid(context),
-          const SizedBox(height: 24),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton(
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14)),
-              ),
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
-            ),
-          ),
         ],
       ),
     );
@@ -592,16 +712,65 @@ class _CustomerViewSheet extends StatelessWidget {
     );
   }
 
+  List<_DocEntry> get _docs => [
+        _DocEntry('Profile Photo', Icons.person_outline, customer.photoUrl,
+            'photo_url'),
+        _DocEntry('Aadhaar Front', Icons.badge_outlined,
+            customer.aadhaarFrontUrl, 'aadhaar_front_url'),
+        _DocEntry('Aadhaar Back', Icons.badge_outlined,
+            customer.aadhaarBackUrl, 'aadhaar_back_url'),
+        _DocEntry('PAN Card', Icons.credit_card_outlined, customer.panUrl,
+            'pan_url'),
+        _DocEntry('Signature', Icons.draw_outlined, customer.signatureUrl,
+            'signature_url'),
+      ];
+
+  /// [customer] with [column] set to [dataUri].
+  Customer _withDocument(String column, String dataUri) => switch (column) {
+        'photo_url' => customer.copyWith(photoUrl: dataUri),
+        'aadhaar_front_url' => customer.copyWith(aadhaarFrontUrl: dataUri),
+        'aadhaar_back_url' => customer.copyWith(aadhaarBackUrl: dataUri),
+        'pan_url' => customer.copyWith(panUrl: dataUri),
+        'signature_url' => customer.copyWith(signatureUrl: dataUri),
+        _ => customer,
+      };
+
+  /// Picks a new image (camera or gallery) and saves it to the backend in
+  /// place of [doc]; the card shows the new image once the server accepts it.
+  Future<void> _updateDocument(_DocEntry doc) async {
+    if (_updatingDoc != null || _loading) return;
+    final picked = await AppUpload.showImagePickerModal(
+      context,
+      title: doc.hasImage ? 'Update ${doc.label}' : 'Upload ${doc.label}',
+    );
+    if (picked == null || !mounted) return;
+
+    setState(() => _updatingDoc = doc.label);
+    try {
+      final dataUri = await encodeDocumentForUpload(await picked.readAsBytes());
+      await widget.api.updateDocument(customer.id, doc.column, dataUri);
+      if (!mounted) return;
+      setState(() => customer = _withDocument(doc.column, dataUri));
+      if (doc.column == 'photo_url') widget.onPhotoChanged?.call();
+      ToastService.show(
+        title: '${doc.label} Updated',
+        message: '${customer.fullName}\'s ${doc.label.toLowerCase()} has been '
+            'saved.',
+        type: ToastType.success,
+      );
+    } catch (e) {
+      ToastService.show(
+        title: 'Update Failed',
+        message: e.toString(),
+        type: ToastType.error,
+      );
+    } finally {
+      if (mounted) setState(() => _updatingDoc = null);
+    }
+  }
+
   Widget _buildDocumentsGrid(BuildContext context) {
-    final docs = <_DocEntry>[
-      _DocEntry('Profile Photo', Icons.person_outline, customer.photoUrl),
-      _DocEntry(
-          'Aadhaar Front', Icons.badge_outlined, customer.aadhaarFrontUrl),
-      _DocEntry(
-          'Aadhaar Back', Icons.badge_outlined, customer.aadhaarBackUrl),
-      _DocEntry('PAN Card', Icons.credit_card_outlined, customer.panUrl),
-      _DocEntry('Signature', Icons.draw_outlined, customer.signatureUrl),
-    ];
+    final docs = _docs;
 
     return LayoutBuilder(builder: (context, constraints) {
       final isNarrow = constraints.maxWidth < 420;
@@ -615,9 +784,18 @@ class _CustomerViewSheet extends StatelessWidget {
         children: docs
             .map((d) => _DocThumbCard(
                   entry: d,
+                  loading: _loading,
                   onTap: d.hasImage
                       ? () => openImageViewer(context, d.data, d.label)
                       : null,
+                  onDownload: d.hasImage && _savingDoc == null
+                      ? () => _downloadDocument(d)
+                      : null,
+                  downloading: _savingDoc == d.label,
+                  onUpdate: _canUpdateDocs && !_loading && _updatingDoc == null
+                      ? () => _updateDocument(d)
+                      : null,
+                  updating: _updatingDoc == d.label,
                 ))
             .toList(),
       );
@@ -644,7 +822,7 @@ class _CustomerViewSheet extends StatelessWidget {
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: AppColors.kBorder),
             ),
-            child: Text(value ?? '-',
+            child: Text((value == null || value.trim().isEmpty) ? '-' : value,
                 style:
                     const TextStyle(color: AppColors.kTextDark, fontSize: 14)),
           ),
@@ -658,17 +836,112 @@ class _DocEntry {
   final String label;
   final IconData icon;
   final String? data;
-  _DocEntry(this.label, this.icon, this.data);
+
+  /// The `customers` column this document is stored in.
+  final String column;
+  _DocEntry(this.label, this.icon, this.data, this.column);
   bool get hasImage => data != null && data!.isNotEmpty;
 }
 
 class _DocThumbCard extends StatelessWidget {
   final _DocEntry entry;
   final VoidCallback? onTap;
-  const _DocThumbCard({required this.entry, this.onTap});
+
+  /// Saves this image as a JPEG; null hides the button.
+  final VoidCallback? onDownload;
+
+  /// This card's image is being saved.
+  final bool downloading;
+
+  /// Picks a new image and uploads it in place of this one; null hides the
+  /// button.
+  final VoidCallback? onUpdate;
+
+  /// This card's new image is being uploaded.
+  final bool updating;
+
+  /// The full record is still on its way, so "Not uploaded" would be a guess.
+  final bool loading;
+  const _DocThumbCard({
+    required this.entry,
+    this.onTap,
+    this.onDownload,
+    this.downloading = false,
+    this.onUpdate,
+    this.updating = false,
+    this.loading = false,
+  });
+
+  static const _badgeDecoration = BoxDecoration(
+    color: Colors.black54,
+    shape: BoxShape.circle,
+  );
+
+  static const _spinner = SizedBox(
+    width: 14,
+    height: 14,
+    child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white),
+  );
+
+  /// A small round icon button over the image. [onTap] null with [busy]
+  /// false hides it.
+  Widget _badgeButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback? onTap,
+    required bool busy,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: Tooltip(
+        message: tooltip,
+        child: Material(
+          color: Colors.transparent,
+          shape: const CircleBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: busy ? null : onTap,
+            child: Ink(
+              padding: const EdgeInsets.all(4),
+              decoration: _badgeDecoration,
+              child: busy
+                  ? _spinner
+                  : Icon(icon,
+                      size: 14, color: Colors.white, semanticLabel: tooltip),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final badges = <Widget>[
+      if (updating || onUpdate != null)
+        _badgeButton(
+          icon: entry.hasImage
+              ? Icons.add_photo_alternate_outlined
+              : Icons.add_a_photo_outlined,
+          tooltip: entry.hasImage ? 'Update image' : 'Upload image',
+          onTap: onUpdate,
+          busy: updating,
+        ),
+      if (entry.hasImage && (downloading || onDownload != null))
+        _badgeButton(
+          icon: Icons.download_rounded,
+          tooltip: 'Download as JPEG',
+          onTap: onDownload,
+          busy: downloading,
+        ),
+      if (entry.hasImage)
+        Container(
+          padding: const EdgeInsets.all(4),
+          decoration: _badgeDecoration,
+          child: const Icon(Icons.zoom_in, size: 14, color: Colors.white),
+        ),
+    ];
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -686,33 +959,34 @@ class _DocThumbCard extends StatelessWidget {
                 child: ClipRRect(
                   borderRadius:
                       const BorderRadius.vertical(top: Radius.circular(14)),
-                  child: entry.hasImage
-                      ? Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            DocumentImage(data: entry.data, fit: BoxFit.cover),
-                            Positioned(
-                              right: 4,
-                              bottom: 4,
-                              child: Container(
-                                padding: const EdgeInsets.all(4),
-                                decoration: const BoxDecoration(
-                                  color: Colors.black54,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(Icons.zoom_in,
-                                    size: 14, color: Colors.white),
-                              ),
-                            ),
-                          ],
-                        )
-                      : Container(
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (entry.hasImage)
+                        DocumentImage(data: entry.data, fit: BoxFit.cover)
+                      else
+                        Container(
                           color: AppColors.kBorder.withOpacity(0.3),
                           child: Center(
-                            child: Icon(entry.icon,
-                                size: 26, color: AppColors.kTextMuted),
+                            child: loading
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  )
+                                : Icon(entry.icon,
+                                    size: 26, color: AppColors.kTextMuted),
                           ),
                         ),
+                      if (badges.isNotEmpty)
+                        Positioned(
+                          right: 4,
+                          bottom: 4,
+                          child: Row(children: badges),
+                        ),
+                    ],
+                  ),
                 ),
               ),
               Padding(
@@ -731,11 +1005,11 @@ class _DocThumbCard extends StatelessWidget {
                           color: AppColors.kTextDark),
                     ),
                     if (!entry.hasImage)
-                      const Padding(
-                        padding: EdgeInsets.only(top: 2),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
                         child: Text(
-                          'Not uploaded',
-                          style: TextStyle(
+                          loading ? 'Loading…' : 'Not uploaded',
+                          style: const TextStyle(
                               fontSize: 10, color: AppColors.kTextMuted),
                         ),
                       ),
@@ -746,6 +1020,88 @@ class _DocThumbCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------
+// CUSTOMER AVATAR
+// The list endpoint sends `has_photo` instead of the picture, so the photo
+// is fetched from photo.php, once per customer per session.
+// ---------------------------------------------------------
+
+class _CustomerAvatar extends StatefulWidget {
+  final Customer customer;
+  final String initials;
+  const _CustomerAvatar({required this.customer, required this.initials});
+
+  static final Map<String, Future<Uint8List?>> _cache = {};
+  static final _api = CustomerApiService();
+
+  @override
+  State<_CustomerAvatar> createState() => _CustomerAvatarState();
+}
+
+class _CustomerAvatarState extends State<_CustomerAvatar> {
+  Uint8List? _bytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _CustomerAvatar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A reload hands every card a fresh Customer; re-resolve from the cache
+    // (instant for unchanged photos) so an edited photo shows up. The old
+    // picture stays on screen until the new one is ready.
+    if (!identical(oldWidget.customer, widget.customer)) {
+      if (oldWidget.customer.id != widget.customer.id ||
+          !widget.customer.hasPhoto) {
+        _bytes = null;
+      }
+      _load();
+    }
+  }
+
+  void _load() {
+    final c = widget.customer;
+    final inline = decodePhotoBytes(c.photoUrl);
+    if (inline != null) {
+      _bytes = inline;
+      return;
+    }
+    if (!c.hasPhoto || c.id.isEmpty) return;
+    final id = c.id;
+    final future = _CustomerAvatar._cache
+        .putIfAbsent(id, () => _CustomerAvatar._api.fetchPhotoBytes(id));
+    future.then((bytes) {
+      if (bytes == null) _CustomerAvatar._cache.remove(id);
+      if (!mounted || widget.customer.id != id) return;
+      setState(() => _bytes = bytes);
+    }).catchError((_) {
+      _CustomerAvatar._cache.remove(id);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _bytes;
+    return CircleAvatar(
+      radius: 24,
+      backgroundColor: AppColors.kGold,
+      backgroundImage: bytes != null ? MemoryImage(bytes) : null,
+      child: bytes == null
+          ? Text(
+              widget.initials,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18),
+            )
+          : null,
     );
   }
 }
@@ -802,8 +1158,6 @@ class _CustomerCard extends StatelessWidget {
         : AppColors.kDanger.withOpacity(0.1);
     final badgeTextColor = isActive ? AppColors.kSuccess : AppColors.kDanger;
 
-    final photoBytes = decodePhotoBytes(customer.photoUrl);
-
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -816,20 +1170,9 @@ class _CustomerCard extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              CircleAvatar(
-                radius: 24,
-                backgroundColor: AppColors.kGold,
-                backgroundImage:
-                    photoBytes != null ? MemoryImage(photoBytes) : null,
-                child: photoBytes == null
-                    ? Text(
-                        _getInitials(customer.fullName),
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18),
-                      )
-                    : null,
+              _CustomerAvatar(
+                customer: customer,
+                initials: _getInitials(customer.fullName),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1004,7 +1347,7 @@ class _CustomerFormState extends State<_CustomerForm> {
   final _photoService = PhotoService();
 
   late TextEditingController _nameCtrl;
-  late TextEditingController _mobileCtrl;
+  late PhoneNumbersController _phones;
   late TextEditingController _addressCtrl;
   late TextEditingController _aadhaarCtrl;
   late TextEditingController _panCtrl;
@@ -1031,7 +1374,8 @@ class _CustomerFormState extends State<_CustomerForm> {
     super.initState();
     final d = widget.initialData;
     _nameCtrl = TextEditingController(text: d?.fullName ?? '');
-    _mobileCtrl = TextEditingController(text: d?.mobile ?? '');
+    _phones = PhoneNumbersController(
+        primary: d?.mobile, alternates: d?.altMobiles ?? const []);
     _addressCtrl = TextEditingController(text: d?.address ?? '');
     _aadhaarCtrl = TextEditingController(text: d?.aadhaar ?? '');
     _panCtrl = TextEditingController(text: d?.pan ?? '');
@@ -1052,7 +1396,7 @@ class _CustomerFormState extends State<_CustomerForm> {
   void dispose() {
     _emailCtrl.dispose();
     _nameCtrl.dispose();
-    _mobileCtrl.dispose();
+    _phones.dispose();
     _addressCtrl.dispose();
     _aadhaarCtrl.dispose();
     _panCtrl.dispose();
@@ -1107,10 +1451,19 @@ class _CustomerFormState extends State<_CustomerForm> {
     }
   }
 
-  Future<void> _pickPhotoFor(_PhotoSlot slot) async {
+Future<void> _pickPhotoFor(_PhotoSlot slot) async {
     try {
-      final dataUri = await _photoService.pickPhotoAsDataUri();
-      if (dataUri == null) return;
+      final XFile? picked = await AppUpload.showImagePickerModal(
+        context,
+        title: 'Update Photo',
+      );
+      if (picked == null) return;
+
+      final bytes = await picked.readAsBytes();
+      final base64Str = base64Encode(bytes);
+      final mimeType = picked.mimeType ?? 'image/jpeg';
+      final dataUri = 'data:$mimeType;base64,$base64Str';
+
       setState(() {
         switch (slot) {
           case _PhotoSlot.profile:
@@ -1165,15 +1518,6 @@ class _CustomerFormState extends State<_CustomerForm> {
   String? _validateName(String? v) {
     final value = v?.trim() ?? '';
     if (value.isEmpty) return 'Full name is required';
-    return null;
-  }
-
-  String? _validateMobile(String? v) {
-    final value = v?.trim() ?? '';
-    if (value.isEmpty) return 'Mobile number is required';
-    if (!RegExp(r'^[6-9]\d{9}$').hasMatch(value)) {
-      return 'Enter a valid 10-digit mobile number';
-    }
     return null;
   }
 
@@ -1262,7 +1606,8 @@ class _CustomerFormState extends State<_CustomerForm> {
       id: widget.initialData?.id ?? '',
       customerId: widget.initialData?.customerId ?? '',
       fullName: _nameCtrl.text.trim(),
-      mobile: _mobileCtrl.text.trim(),
+      mobile: _phones.primaryNumber,
+      altMobiles: _phones.alternateNumbers,
       address: _addressCtrl.text.trim(),
       aadhaar: _aadhaarCtrl.text.trim(),
       pan: _panCtrl.text.trim().toUpperCase(),
@@ -1352,13 +1697,6 @@ class _CustomerFormState extends State<_CustomerForm> {
                         ),
                       ],
                     ),
-                    IconButton(
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
-                      icon:
-                          const Icon(Icons.close, color: AppColors.kTextMuted),
-                      onPressed: () => Navigator.pop(context),
-                    ),
                   ],
                 ),
                 const SizedBox(height: 24),
@@ -1374,17 +1712,12 @@ class _CustomerFormState extends State<_CustomerForm> {
                   prefixIcon: Icons.person_outline,
                   textCapitalization: TextCapitalization.words,
                 ),
-                _buildInputField(
-                  'Mobile Number',
-                  '10-digit mobile number',
-                  _mobileCtrl,
-                  validator: _validateMobile,
-                  prefixIcon: Icons.phone_outlined,
-                  keyboardType: TextInputType.phone,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(10),
-                  ],
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: PhoneNumbersField(
+                    controller: _phones,
+                    label: 'Mobile Number',
+                  ),
                 ),
                 _buildInputField(
                   'Address',

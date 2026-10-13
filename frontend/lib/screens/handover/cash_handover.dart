@@ -10,6 +10,7 @@ import '../../theme/confirm_dialog.dart';
 import '../../services/session_service.dart';
 import '../../models/user_role.dart';
 import '../../l10n/generated/app_localizations.dart';
+import '../../widgets/responsive_stat_grid.dart';
 
 String formatIndianCurrency(num value, {bool withSymbol = true}) {
   final isNegative = value < 0;
@@ -92,10 +93,6 @@ class _CashHandoverScreenState extends State<CashHandoverScreen> {
   List<HandoverRecord> _history = [];
 
   bool get _isAgentView =>
-      SessionService.instance.currentUser?.role == UserRole.agent;
-
-  bool get _canCreateOrEdit =>
-      SessionService.instance.currentUser?.role == UserRole.admin ||
       SessionService.instance.currentUser?.role == UserRole.agent;
 
   bool get _canManageRecords =>
@@ -372,11 +369,9 @@ class _CashHandoverScreenState extends State<CashHandoverScreen> {
           final hPad = narrow ? 12.0 : (tablet ? 24.0 : 16.0);
 
           // Adaptive grid: 1 column on very narrow phones (folded phones,
-          // iPhone SE in split view, etc.), 2 on regular phones, 3 on
-          // tablets. Aspect ratio also loosens on narrow screens so the
-          // currency values never get clipped.
-          final crossAxisCount = narrow ? 1 : (tablet ? 3 : 2);
-          final aspectRatio = narrow ? 2.6 : (tablet ? 1.8 : 1.5);
+          // iPhone SE in split view, etc.) so the currency values never get
+          // clipped, otherwise as many as fit, up to 3 on tablets.
+          final maxStatColumns = narrow ? 1 : 3;
 
           return RefreshIndicator(
             onRefresh: _loadData,
@@ -417,7 +412,7 @@ class _CashHandoverScreenState extends State<CashHandoverScreen> {
                               spacing: 12,
                               runSpacing: 10,
                               children: [
-                                if (_canCreateOrEdit)
+                                if (_isAgentView)
                                   SizedBox(
                                     // Full width on narrow phones so the tap
                                     // target is comfortably large; fixed
@@ -456,13 +451,9 @@ class _CashHandoverScreenState extends State<CashHandoverScreen> {
                               ],
                             ),
                           const SizedBox(height: 20),
-                          GridView.count(
-                            crossAxisCount: crossAxisCount,
-                            shrinkWrap: true,
-                            physics: const NeverScrollableScrollPhysics(),
-                            mainAxisSpacing: 12,
-                            crossAxisSpacing: 12,
-                            childAspectRatio: aspectRatio,
+                          ResponsiveStatGrid(
+                            minColumns: 1,
+                            maxColumns: maxStatColumns,
                             children: _buildStatCards(l10n),
                           ),
                           if (_isAgentView && _totalPending > 0.01) ...[
@@ -616,6 +607,7 @@ class _StatCard extends StatelessWidget {
                   alignment: Alignment.centerLeft,
                   child: Text(
                     value,
+                    maxLines: 1,
                     style: const TextStyle(
                       color: AppColors.kTextDark,
                       fontSize: 20,
@@ -710,16 +702,25 @@ class _SettlementTable extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    // On narrow phones a 4-column money table gets cramped and truncates
-    // currency values. Instead of shrinking text to the point of being
-    // unreadable, we give the table a fixed minimum width and let it
-    // scroll horizontally — the user can swipe to see all columns.
+    // A 4-column money table gets cramped and truncates currency values on
+    // smaller widths. The table always gets a minimum width and scrolls
+    // left/right; on wide screens it simply stretches to fill the card.
     final table = _buildTable(l10n);
-    if (!narrow) return table;
+    const minTableWidth = 340.0;
 
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: SizedBox(width: 560, child: table),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth > minTableWidth
+            ? constraints.maxWidth
+            : minTableWidth;
+        return Scrollbar(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.only(bottom: 10),
+            child: SizedBox(width: width, child: table),
+          ),
+        );
+      },
     );
   }
 
@@ -731,7 +732,7 @@ class _SettlementTable extends StatelessWidget {
           child: Row(
             children: [
               Expanded(
-                  flex: 3,
+                  flex: 2,
                   child: Text(l10n.handoverColAgent,
                       style: const TextStyle(
                           fontSize: 11,
@@ -772,7 +773,7 @@ class _SettlementTable extends StatelessWidget {
                   child: Row(
                     children: [
                       Expanded(
-                        flex: 3,
+                        flex: 2,
                         child: Text(s.agentName,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(

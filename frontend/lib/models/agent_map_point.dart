@@ -58,11 +58,15 @@ class AgentRouteSummary {
   final int remaining;
   final int completedToday;
   final double pendingAmount;
+  final double penaltyAmount;
+  final double collectedToday;
 
   const AgentRouteSummary({
     required this.remaining,
     required this.completedToday,
     required this.pendingAmount,
+    this.penaltyAmount = 0,
+    this.collectedToday = 0,
   });
 
   int get totalStops => remaining + completedToday;

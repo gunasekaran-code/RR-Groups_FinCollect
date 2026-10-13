@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../../routes/app_routes.dart';
 import '../../services/privilege_service.dart';
@@ -7,8 +8,10 @@ import '../../theme/app_theme.dart';
 import '../../theme/glass_toast.dart';
 // Imported for future/shared styling context
 import '../../widgets/app_shell.dart';
+import '../../widgets/app_upload.dart';
 import '../../widgets/status_badge.dart';
 import '../../l10n/generated/app_localizations.dart';
+import '../../widgets/responsive_stat_grid.dart';
 
 class UserManagementScreen extends StatefulWidget {
   const UserManagementScreen({super.key});
@@ -349,9 +352,6 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final width = MediaQuery.of(context).size.width;
-    final isWide = width >= 700;
-
     return AppShell(
       currentRoute: AppRoutes.userManagement,
       title: l10n.userManagementScreenTitle,
@@ -390,13 +390,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
               ],
             ),
             const SizedBox(height: 20),
-            GridView.count(
-              crossAxisCount: width < 420 ? 2 : (isWide ? 4 : 2),
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: 12,
-              crossAxisSpacing: 12,
-              childAspectRatio: 1.6,
+            ResponsiveStatGrid(
               children: [
                 _StatCard(
                     icon: Icons.manage_accounts_outlined,
@@ -605,8 +599,9 @@ class _AddUserDialogContentState extends State<_AddUserDialogContent> {
   late final TextEditingController _nameCtrl;
   late final TextEditingController _emailCtrl;
   late final TextEditingController _mobileCtrl;
-  late final TextEditingController _avatarCtrl;
   late final TextEditingController _passwordCtrl;
+  // Stored as a base64 data URI in `avatar_url`, same as the profile page.
+  String? _avatar;
   // Canonical codes ('admin'/'agent'/'customer', 'active'/'inactive'), kept
   // locale-independent; only the dropdown display text is localized.
   String _role = 'agent';
@@ -634,7 +629,7 @@ class _AddUserDialogContentState extends State<_AddUserDialogContent> {
     _nameCtrl = TextEditingController(text: u?.fullName ?? '');
     _emailCtrl = TextEditingController(text: u?.email ?? '');
     _mobileCtrl = TextEditingController(text: u?.mobile ?? '');
-    _avatarCtrl = TextEditingController(text: u?.avatarUrl ?? '');
+    _avatar = u?.avatarUrl;
     _passwordCtrl = TextEditingController();
     if (u != null) {
       _role = (u.role == 'admin' || u.role == 'customer') ? u.role : 'agent';
@@ -647,7 +642,6 @@ class _AddUserDialogContentState extends State<_AddUserDialogContent> {
     _nameCtrl.dispose();
     _emailCtrl.dispose();
     _mobileCtrl.dispose();
-    _avatarCtrl.dispose();
     _passwordCtrl.dispose();
     super.dispose();
   }
@@ -681,9 +675,21 @@ class _AddUserDialogContentState extends State<_AddUserDialogContent> {
       'mobile': _mobileCtrl.text.trim(),
       'role': _role,
       'status': _status,
-      'avatar': _avatarCtrl.text.trim(),
+      'avatar': _avatar?.trim() ?? '',
       'password': password,
     });
+  }
+
+  Future<void> _pickAvatar() async {
+    final picked = await AppUpload.showImagePickerModal(context);
+    if (picked == null || !mounted) return;
+
+    final bytes = await picked.readAsBytes();
+    if (!mounted) return;
+
+    final mime =
+        picked.name.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+    setState(() => _avatar = 'data:$mime;base64,${base64Encode(bytes)}');
   }
 
   @override
@@ -887,13 +893,54 @@ class _AddUserDialogContentState extends State<_AddUserDialogContent> {
                     }),
                     const SizedBox(height: 14),
 
-                    _FieldLabel(l10n.avatarUrlFieldLabel),
-                    const SizedBox(height: 6),
-                    _buildField(_avatarCtrl, l10n.avatarUrlFieldHint),
-                    const SizedBox(height: 4),
-                    Text(l10n.avatarUrlHelperText,
-                        style: const TextStyle(
-                            fontSize: 11, color: AppColors.kTextMuted)),
+                    _FieldLabel(l10n.agentFieldProfilePhoto),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        GestureDetector(
+                          onTap: _pickAvatar,
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              _UserAvatar(
+                                avatarUrl: _avatar,
+                                name: _nameCtrl.text,
+                                radius: 32,
+                              ),
+                              Positioned(
+                                right: -2,
+                                bottom: -2,
+                                child: Container(
+                                  padding: const EdgeInsets.all(5),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.kGoldDark,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                        color: AppColors.kSurface, width: 2),
+                                  ),
+                                  child: const Icon(Icons.photo_camera_rounded,
+                                      size: 12, color: Colors.white),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.kGoldDark,
+                            side: const BorderSide(color: AppColors.kGoldDark),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12)),
+                          ),
+                          onPressed: _pickAvatar,
+                          icon: const Icon(Icons.upload_rounded, size: 18),
+                          label: Text(l10n.agentUploadPhotoButton,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w600)),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -1060,22 +1107,7 @@ class _UserCell extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        CircleAvatar(
-          radius: 16,
-          backgroundColor: AppColors.kGold,
-          child: Text(
-            user.fullName
-                .trim()
-                .split(RegExp(r'\s+'))
-                .where((p) => p.isNotEmpty)
-                .map((p) => p[0])
-                .take(2)
-                .join()
-                .toUpperCase(),
-            style: const TextStyle(
-                color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
-          ),
-        ),
+        _UserAvatar(avatarUrl: user.avatarUrl, name: user.fullName, radius: 16),
         const SizedBox(width: 10),
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1092,6 +1124,73 @@ class _UserCell extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// Decoded avatars, keyed by the stored `avatar_url` value, so rebuilding the
+/// table doesn't re-decode every base64 photo (and make them flicker).
+final Map<String, ImageProvider> _avatarImageCache = {};
+
+/// `avatar_url` holds a base64 data URI for uploaded photos; older rows may
+/// still hold a plain http(s) link from the former URL field.
+ImageProvider? _avatarImage(String? avatarUrl) {
+  if (avatarUrl == null || avatarUrl.trim().isEmpty) return null;
+  final cached = _avatarImageCache[avatarUrl];
+  if (cached != null) return cached;
+
+  final ImageProvider image;
+  if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) {
+    image = NetworkImage(avatarUrl);
+  } else {
+    final comma = avatarUrl.indexOf(',');
+    try {
+      image = MemoryImage(base64Decode(
+          comma == -1 ? avatarUrl : avatarUrl.substring(comma + 1)));
+    } catch (_) {
+      return null;
+    }
+  }
+  return _avatarImageCache[avatarUrl] = image;
+}
+
+/// Profile photo when the user has one, initials otherwise.
+class _UserAvatar extends StatelessWidget {
+  final String? avatarUrl;
+  final String name;
+  final double radius;
+  const _UserAvatar(
+      {required this.avatarUrl, required this.name, required this.radius});
+
+  @override
+  Widget build(BuildContext context) {
+    final image = _avatarImage(avatarUrl);
+    final initials = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((p) => p.isNotEmpty)
+        .map((p) => p[0])
+        .take(2)
+        .join()
+        .toUpperCase();
+
+    return CircleAvatar(
+      radius: radius,
+      backgroundColor: AppColors.kGold,
+      backgroundImage: image,
+      onBackgroundImageError: image == null ? null : (_, __) {},
+      child: image != null
+          ? null
+          : initials.isEmpty
+              ? Icon(Icons.person_rounded,
+                  color: Colors.white, size: radius)
+              : Text(
+                  initials,
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: radius * 0.7),
+                ),
     );
   }
 }

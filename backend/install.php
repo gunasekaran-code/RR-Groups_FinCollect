@@ -6,6 +6,9 @@
 
 require_once __DIR__ . '/bootstrap.php';
 
+
+// Not a public URL. See require_maintenance_admin() in bootstrap.php.
+require_maintenance_admin();
 header('Content-Type: text/html; charset=utf-8');
 
 $logs = [];

@@ -72,12 +72,16 @@ class FieldMapApiService {
 
     final pendingAmount =
         stops.fold<double>(0, (sum, s) => sum + s.pendingAmount);
+    final penaltyAmount =
+        groups.fold<double>(0, (sum, g) => sum + g.totalPenalty);
 
     return AgentRouteResult(
       summary: AgentRouteSummary(
         remaining: stops.length,
         completedToday: todayStats.count,
         pendingAmount: pendingAmount,
+        penaltyAmount: penaltyAmount,
+        collectedToday: todayStats.amount,
       ),
       stops: stops,
     );

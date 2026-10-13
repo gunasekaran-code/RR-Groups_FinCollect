@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -59,9 +60,13 @@ class BrandingService {
   final ValueNotifier<AppBranding> branding =
       ValueNotifier<AppBranding>(const AppBranding.fallback());
 
+  /// Loads the cached branding, then refreshes from the server in the
+  /// background. The refresh is not awaited so a slow or offline network
+  /// can't hold the app on the launch screen; listeners of [branding]
+  /// pick up the fresh value when it arrives.
   Future<void> initialize() async {
     await _loadCached();
-    await refreshFromServer();
+    unawaited(refreshFromServer());
   }
 
 Future<void> refreshFromServer() async {
@@ -72,7 +77,9 @@ Future<void> refreshFromServer() async {
   }
 
   try {
-    final rows = await ApiClient.instance.list('settings');
+    final rows = await ApiClient.instance
+        .list('settings')
+        .timeout(const Duration(seconds: 15));
 
     final fresh = AppBranding.fromJson(rows.first);
     // debugPrint('BrandingService: parsed company_name=${fresh.companyName} logo_url=${fresh.logoUrl}');

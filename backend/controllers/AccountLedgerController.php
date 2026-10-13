@@ -38,6 +38,32 @@ class AccountLedgerController extends ResourceController
             }
         }
 
+        // 1b. Deleting entries. A POST rather than a DELETE because the request
+        //     carries a list of ids in its body: rest.php's DELETE takes a
+        //     filter in the query string, and `?id=in.(…)` is read there as a
+        //     bulk rebuild by the app itself — which skips both the recycle bin
+        //     and the soft-delete flag and removes the rows outright. Selecting
+        //     twenty entries and pressing Delete must not be the one path that
+        //     destroys them.
+        if ($method === 'POST' && ($_GET['action'] ?? '') === 'bulk_delete') {
+            if ($role !== 'admin') {
+                json_error('Only administrators can delete account book entries', 403);
+            }
+            $body = $this->body();
+            // `items` carries the table each row came from, because the account
+            // book is a union of three of them and a loan collection is not a
+            // ledger entry. `ids` is still accepted and read as ledger rows.
+            $items = $body['items'] ?? $body['ids'] ?? null;
+            if (!is_array($items) || !$items) {
+                json_error('Which entries?', 400);
+            }
+            if (count($items) > 200) {
+                json_error('Too many entries at once — select 200 or fewer.', 400);
+            }
+            json_out(AccountLedger::softDeleteMany($items, $claims));
+            return;
+        }
+
         // 2. Reads are privileged: this table is the company cash book.
         if ($method === 'GET') {
             if ($role === 'agent') {

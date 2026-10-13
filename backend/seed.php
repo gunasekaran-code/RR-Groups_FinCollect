@@ -3,6 +3,9 @@
 // Run after schema.sql (fresh) or migrate.php (existing):  php seed.php
 require_once __DIR__ . '/bootstrap.php';
 
+
+// Not a public URL. See require_maintenance_admin() in bootstrap.php.
+require_maintenance_admin();
 $pdo = Database::pdo();
 
 // ---- fixed demo IDs (stable so re-running is idempotent) ----

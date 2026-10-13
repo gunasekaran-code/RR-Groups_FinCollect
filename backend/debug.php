@@ -12,6 +12,65 @@ header('Access-Control-Allow-Origin: *');
 
 $results = ['timestamp' => date('c'), 'php_version' => phpversion()];
 
+// ── Is the whole backend actually the same release? ──────────────────────
+//
+// The failure this was added for: a 500 on every screen, on production only,
+// that could not be reproduced anywhere else. An upload that replaces some
+// PHP files and not others leaves classes from two different releases in the
+// same request — a controller calling a method its model does not have yet —
+// and the result is "Call to undefined method" on whichever screen touches
+// the seam first. Stale OPcache does the same thing without anybody having
+// uploaded anything wrong.
+//
+// Neither is visible from the outside, and both look like a code bug. So:
+// name the methods each release added, and say plainly which are missing.
+// A row reading false next to a file whose date says it is current means
+// OPcache is serving yesterday's bytecode.
+$expected = [
+    'Loan::deriveTotals'                       => ['models/Loan.php', 'loan totals derived server-side'],
+    'Loan::disbursedAmount'                    => ['models/Loan.php', 'what the borrower was handed'],
+    'LoanRecalc::sync'                         => ['core/LoanRecalc.php', 'loan recalculation'],
+    'QueryParser::columnList'                  => ['core/QueryParser.php', 'select= narrowing'],
+    'Fund::weeklyAmount'                       => ['models/Fund.php', 'fund weekly amount derived'],
+    'Fund::deriveFields'                       => ['models/Fund.php', 'fund fields backfill'],
+    'Customer::syncLoginAvatar'                => ['models/Customer.php', 'customer photo reaches their login'],
+    'AccountLedger::getUnifiedTransactions'    => ['models/AccountLedger.php', 'account book stream'],
+];
+$version = [];
+$missing = [];
+foreach ($expected as $ref => [$file, $what]) {
+    [$class, $method] = explode('::', $ref, 2);
+    $path = __DIR__ . '/' . $file;
+    $exists = is_file($path);
+    $has = false;
+    if ($exists) {
+        // Read the file rather than autoloading it: a class that fails to
+        // load is exactly the case being diagnosed.
+        $src = (string)@file_get_contents($path);
+        $has = (bool)preg_match('/function\s+' . preg_quote($method, '/') . '\s*\(/i', $src);
+    }
+    $version[$ref] = [
+        'file'     => $file,
+        'present'  => $exists,
+        'has'      => $has,
+        'modified' => $exists ? date('c', (int)filemtime($path)) : null,
+        'purpose'  => $what,
+    ];
+    if (!$exists || !$has) $missing[] = $ref . '  (' . $file . ')';
+}
+$results['code_version'] = $version;
+$results['code_version_verdict'] = $missing
+    ? 'MISMATCHED — re-upload the whole backend folder. Missing: ' . implode('; ', $missing)
+    : 'consistent — every file in this release is present';
+
+// Methods the classes really expose once loaded. If a file has the method but
+// the loaded class does not, the bytecode in memory is older than the file:
+// restart PHP, or wait out opcache.revalidate_freq.
+$results['opcache'] = [
+    'enabled' => function_exists('opcache_get_status') ? (bool)@opcache_get_status(false) : false,
+    'note'    => 'if a method reads has=true below but the app still says "undefined method", restart PHP in cPanel',
+];
+
 // Optional: ?force_charset=1 clears the one-shot marker so the utf8mb4
 // migration in bootstrap.php re-runs on this request. Must happen before
 // bootstrap.php is required further down.
@@ -127,6 +186,9 @@ try {
 try {
     ob_start();
     require_once __DIR__ . '/bootstrap.php';
+
+// Not a public URL. See require_maintenance_admin() in bootstrap.php.
+require_maintenance_admin();
     ob_end_clean();
     $results['bootstrap'] = 'OK';
 } catch (\Throwable $e) {

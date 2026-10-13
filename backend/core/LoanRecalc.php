@@ -44,8 +44,10 @@ class LoanRecalc
         $loan = $stmt->fetch();
         if (!$loan) return;
 
+        $loan = self::backfillTotals($pdo, $loan);
+
         $stmt = $pdo->prepare(
-            'SELECT `collection_amount`, `notes`, `collection_date`
+            'SELECT `collection_amount`, `penalty_amount`, `notes`, `collection_date`
                FROM `collections` WHERE `loan_id` = ? AND `delflag` = 0
               ORDER BY `collection_date` ASC, `created_at` ASC'
         );
@@ -66,6 +68,35 @@ class LoanRecalc
         } else {
             self::syncRegular($pdo, $loan, $collections, $rows);
         }
+    }
+
+    /**
+     * The part of a receipt that pays down the loan.
+     *
+     * A receipt can carry a late fee as well as an instalment. The fee is not
+     * a repayment — it is charged *because* a repayment was late — so it must
+     * not come off the balance. Collecting ₹1,400 against a ₹1,300 instalment
+     * carrying a ₹100 penalty used to take a ₹13,000 loan down to ₹11,600,
+     * which credited the customer with her own fine and recorded no penalty
+     * income anywhere.
+     *
+     * The split is recorded on the receipt rather than guessed at here, so the
+     * book can always say which rupees were which.
+     */
+    private static function loanPortion(array $c): float
+    {
+        $amount  = (float)($c['collection_amount'] ?? 0);
+        $penalty = max(0.0, (float)($c['penalty_amount'] ?? 0));
+        // Clamped: a receipt can never be more penalty than it is money.
+        return self::round2(max(0.0, $amount - min($penalty, $amount)));
+    }
+
+    /** The late fee inside a receipt, never more than the receipt itself. */
+    private static function penaltyPortion(array $c): float
+    {
+        $amount  = (float)($c['collection_amount'] ?? 0);
+        $penalty = max(0.0, (float)($c['penalty_amount'] ?? 0));
+        return self::round2(min($penalty, max(0.0, $amount)));
     }
 
     private static function round2(float $n): float
@@ -104,7 +135,9 @@ class LoanRecalc
         $availableInterestPaid = 0.0;
 
         foreach ($collections as $c) {
-            $amt = (float)($c['collection_amount'] ?? 0);
+            // A late fee is neither interest nor principal, so it takes no part
+            // in this allocation either.
+            $amt = self::loanPortion($c);
             if ($amt <= 0) continue;
 
             switch (self::classify((string)($c['notes'] ?? ''))) {
@@ -207,10 +240,15 @@ class LoanRecalc
      */
     private static function syncRegular(PDO $pdo, array $loan, array $collections, array $rows): void
     {
+        // Only the repayment part of each receipt cascades over the schedule;
+        // the late fee rides along on the same receipt but is not a repayment.
         $totalCollected = 0.0;
+        $penaltyCredit = 0.0;
         foreach ($collections as $c) {
-            $totalCollected += (float)($c['collection_amount'] ?? 0);
+            $totalCollected += self::loanPortion($c);
+            $penaltyCredit += self::penaltyPortion($c);
         }
+        $penaltyCredit = self::round2($penaltyCredit);
 
         $isWeekly = (($loan['loan_type'] ?? '') === 'weekly');
         $penaltyEnabled = !empty($loan['penalty_enabled']);
@@ -258,6 +296,19 @@ class LoanRecalc
                     $daysOverdue = max(0, (int)((strtotime($today) - strtotime($r['due_date'])) / 86400));
                     $penalty = self::round2($daysOverdue * $penaltyRatePerDay);
                 }
+                // Fees already paid are spent against the fees as they accrue,
+                // oldest instalment first — the same shape as the cascade
+                // above, and for the same reason. Without it the figure was
+                // re-derived from the overdue rows on every sync and a paid
+                // penalty was simply charged again tomorrow.
+                //
+                // Both the row and the loan total carry the remainder, because
+                // the screens read whichever is to hand: the schedule sums the
+                // rows, and `dueToday` prefers the loan and falls back to them.
+                // Reducing only one would make the two disagree.
+                $credit = min($penaltyCredit, $penalty);
+                $penaltyCredit = self::round2($penaltyCredit - $credit);
+                $penalty = self::round2($penalty - $credit);
                 $totalPenalty += $penalty;
             }
 
@@ -338,4 +389,46 @@ class LoanRecalc
         $binds[] = $loan['id'];
         $pdo->prepare('UPDATE `loans` SET ' . implode(', ', $set) . ' WHERE `id` = ?')->execute($binds);
     }
-}
+
+    /**
+     * Heal a loan whose derived figures were never written.
+     *
+     * `emi`, `total_interest` and `total_repayment` used to arrive only from
+     * the browser. A loan written any other way kept all three at zero, and a
+     * zero `total_repayment` is actively wrong rather than merely blank: the
+     * Account Book reads a disbursement as `total_repayment - total_interest`,
+     * so a zero made it book the whole principal as cash out — ₹20,000 handed
+     * over on a loan where the borrower took ₹18,000 and ₹2,000 was kept as
+     * interest. The schedule screen showed the same zero as "Total Repayment".
+     *
+     * Runs on every sync, which is every loan write and every collection, so
+     * an affected loan corrects itself the moment anything touches it. Only
+     * non-positive fields are filled — see Loan::deriveTotals.
+     */
+    private static function backfillTotals(PDO $pdo, array $loan): array
+    {
+        // A closed loan's totals are history, not a plan, and must not be
+        // re-derived from the original terms. A settled loan is the case that
+        // proves it: closing early rewrites `total_interest` to the interest
+        // actually earned, and a loan settled at exactly what it lent writes a
+        // genuine zero there. `deriveTotals` cannot tell a real zero from a
+        // missing one, so it filled the original ₹1,000 straight back in and
+        // the book went on claiming interest that had been waived.
+        if (strtolower(trim((string)($loan['status'] ?? ''))) === 'closed') {
+            return $loan;
+        }
+
+        $fill = Loan::deriveTotals($loan);
+        if (!$fill) return $loan;
+
+        $set = [];
+        $binds = [];
+        foreach ($fill as $col => $val) {
+            $set[] = "`$col` = ?";
+            $binds[] = $val;
+        }
+        $binds[] = $loan['id'];
+        $pdo->prepare('UPDATE `loans` SET ' . implode(', ', $set) . ' WHERE `id` = ?')->execute($binds);
+
+        return array_merge($loan, $fill);
+    }}

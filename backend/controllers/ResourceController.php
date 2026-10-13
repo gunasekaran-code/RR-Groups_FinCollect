@@ -31,7 +31,13 @@ class ResourceController extends Controller
         $this->applySoftDeleteFilter();
         $columns = $model::columns();
         [$where, $binds] = QueryParser::where($columns);
-        json_out($model::select($where, $binds, QueryParser::order($columns), QueryParser::limit()));
+        json_out($model::select(
+            $where,
+            $binds,
+            QueryParser::order($columns),
+            QueryParser::limit(),
+            QueryParser::columnList($columns, $model::heavyColumns(), $model::presenceFlags())
+        ));
     }
 
     protected function store(): void

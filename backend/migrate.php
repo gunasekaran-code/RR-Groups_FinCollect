@@ -3,6 +3,9 @@
 // profiles.customer_id, and KYC columns.  Run once:  php migrate.php
 require_once __DIR__ . '/bootstrap.php';
 
+
+// Not a public URL. See require_maintenance_admin() in bootstrap.php.
+require_maintenance_admin();
 $pdo = Database::pdo();
 
 // 1. Extend the role enum to include 'customer'.

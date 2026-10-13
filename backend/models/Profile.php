@@ -4,6 +4,25 @@ class Profile extends Model
     protected static string $table = 'profiles';
     protected static array $hidden = ['password_hash', 'reset_otp_hash', 'reset_otp_expires'];
 
+    /**
+     * The avatar is a base64 data URL, and it does not belong in a list.
+     *
+     * Agent Management asks for every profile and draws a 36px face next to
+     * each name. With eight agents and sixty customer logins on file that one
+     * request answered with 1.88 MB, of which 1.85 MB was photographs — and
+     * the table could not paint a single name until the last one had landed.
+     * The screen needs four columns out of that to decide anything.
+     *
+     * Hidden from the default list, `has_photo` reports whether there is one,
+     * and `photo.php` serves it per row: lazily, cached, and 304 thereafter.
+     * Naming the column explicitly still works, which is how sign-in and
+     * `me` get the signed-in user's own picture in a single row.
+     */
+    protected static array $heavy = ['avatar_url'];
+
+    /** @var array<string,string> */
+    protected static array $presence = ['avatar_url' => 'has_photo'];
+
     public static function findByEmail(string $email): ?array
     {
         return static::firstRaw(' WHERE email = ?', [$email]);

@@ -10,6 +10,87 @@
 
 class AccountLedger extends Model
 {
+    /**
+     * The cash that actually left the safe on a loan, as SQL over `loans`.
+     *
+     * A ₹10,000 weekly loan does not put ₹10,000 in anyone's hand. The
+     * interest is deducted at disbursement: the borrower receives ₹9,000 and
+     * the ₹1,000 never leaves. Which plan a loan is on cannot be read off
+     * `loan_type` — the daily plans differ from each other and the choice
+     * between them is not stored — but the totals say it plainly:
+     *
+     *   interest added on top   → repays principal + interest
+     *   interest taken upfront  → repays the principal alone
+     *
+     * so `total_repayment − total_interest` is the principal on the plans that
+     * add, and the principal less the interest on the plans that deduct.
+     * Either way it is the money that went out of the door. Loans written
+     * before those totals were stored fall back to the loan amount, which is
+     * what they were.
+     *
+     * This is a constant because it was not. The Cash In Hand card computed it
+     * correctly and the Account Book's disbursement row was written later with
+     * a second, simpler rule — `loan_amount` — so the same screen showed
+     * ₹10,000 leaving against a borrower who had been handed ₹9,000, and the
+     * transaction disagreed with the summary above it. One expression now, in
+     * one place, used by both.
+     *
+     * The outer LEAST is the floor under all of it: whatever the stored totals
+     * say, nobody was handed more than the principal. Without it a row with
+     * `total_interest = 0` and a `total_repayment` that includes the interest
+     * — which is how several loans here are stored — reported ₹11,000 leaving
+     * the safe on a ₹10,000 loan.
+     */
+    /**
+     * What a loan repays when the stored `total_repayment` is zero.
+     *
+     * Falling back to `loan_amount` was the old rule, and on an upfront-interest
+     * plan it is wrong in the expensive direction: a ₹20,000 weekly loan whose
+     * totals never got written booked ₹20,000 leaving the safe when ₹18,000
+     * changed hands. The borrower had not been handed the ₹2,000 of interest —
+     * it never left.
+     *
+     * Every plan's repayment is a pure function of principal, rate, type and
+     * duration, all of which are stored, so the zero is reconstructed rather
+     * than guessed. This mirrors Loan::deriveTotals and calc.ts; t59 holds the
+     * three in step. LoanRecalc writes the figures back on the next sync, after
+     * which the stored branch above takes over and this is never reached.
+     */
+    private const DERIVED_REPAYMENT = "CASE
+            WHEN LOWER(COALESCE(`loan_type`, '')) = 'weekly' THEN COALESCE(`loan_amount`, 0)
+            WHEN LOWER(COALESCE(`loan_type`, '')) = 'daily'
+                 THEN CASE WHEN COALESCE(`loan_duration`, 0) >= 100
+                           THEN COALESCE(`loan_amount`, 0)
+                           ELSE COALESCE(`loan_amount`, 0) + ROUND(COALESCE(`loan_amount`, 0) * COALESCE(`interest_percentage`, 0) / 100, 2)
+                      END
+            ELSE COALESCE(`loan_amount`, 0)
+              + ROUND(COALESCE(`loan_amount`, 0) * COALESCE(`interest_percentage`, 0) / 100, 2)
+              * GREATEST(COALESCE(`loan_duration`, 0), 0)
+        END";
+
+    /**
+     * The interest inside that repayment, on the same reconstruction. Needed
+     * as a pair: subtracting a stored zero from a derived repayment would
+     * report the whole principal going out again.
+     */
+    private const DERIVED_INTEREST = "CASE
+            WHEN LOWER(COALESCE(`loan_type`, '')) IN ('weekly', 'daily')
+                 THEN ROUND(COALESCE(`loan_amount`, 0) * COALESCE(`interest_percentage`, 0) / 100, 2)
+            ELSE ROUND(COALESCE(`loan_amount`, 0) * COALESCE(`interest_percentage`, 0) / 100, 2)
+                 * GREATEST(COALESCE(`loan_duration`, 0), 0)
+        END";
+
+    private const LOAN_CASH_OUT = "LEAST(
+            CASE WHEN COALESCE(`total_repayment`, 0) > 0
+                 THEN GREATEST(COALESCE(`total_repayment`, 0) - COALESCE(`total_interest`, 0), 0)
+                 ELSE GREATEST((" . self::DERIVED_REPAYMENT . ") - (" . self::DERIVED_INTEREST . "), 0)
+            END,
+            COALESCE(`loan_amount`, 0)
+        )";
+
+    /** The slice of principal never handed over — upfront interest, still in the safe. */
+    private const LOAN_INTEREST_HELD = "GREATEST(COALESCE(`loan_amount`, 0) - (" . self::LOAN_CASH_OUT . "), 0)";
+
     protected static string $table = 'account_ledger';
 
     // Entry Types
@@ -112,6 +193,29 @@ class AccountLedger extends Model
         $stmt->execute();
         $chitPayouts = (float)$stmt->fetchColumn();
 
+        // 5c. The fund-payout slice, on the same footing. A maturity or closure
+        //     payout used to be written into `fund_payments`, the table of
+        //     deposits coming IN, so handing a customer ₹6,000 back *raised*
+        //     Cash In Hand by ₹6,000. It is a cash_out now, matched through the
+        //     payout's own ledger_id — never by category text, so renaming a
+        //     category cannot turn a payout into an ordinary expense on screen.
+        $stmt = $pdo->prepare(
+            "SELECT COALESCE(SUM(al.amount), 0)
+               FROM account_ledger al
+              WHERE al.delflag = 0
+                AND al.entry_type IN ('cash_out', 'expense')
+                AND EXISTS (SELECT 1 FROM fund_payouts fp
+                             WHERE fp.ledger_id = al.id AND fp.delflag = 0)"
+        );
+        try {
+            $stmt->execute();
+            $fundPayouts = (float)$stmt->fetchColumn();
+        } catch (\Throwable $e) {
+            // The table arrives by migration; a server mid-upgrade reports zero
+            // rather than failing the whole summary.
+            $fundPayouts = 0.0;
+        }
+
         // 6. Loan principal handed to customers — cash that physically left.
         //    'pending' is excluded: a loan awaiting approval has not been paid
         //    out. This is the money-out side of `collections`, which is already
@@ -134,11 +238,7 @@ class AccountLedger extends Model
         //    that deduct. Loans written before those totals were stored fall
         //    back to the loan amount, which is what they were.
         $stmt = $pdo->prepare(
-            "SELECT COALESCE(SUM(
-                        CASE WHEN COALESCE(total_repayment, 0) > 0
-                             THEN GREATEST(COALESCE(total_repayment, 0) - COALESCE(total_interest, 0), 0)
-                             ELSE COALESCE(loan_amount, 0)
-                        END), 0)
+            "SELECT COALESCE(SUM(" . self::LOAN_CASH_OUT . "), 0)
                FROM loans
               WHERE delflag = 0 AND status IN ('active', 'overdue', 'closed')"
         );
@@ -150,12 +250,7 @@ class AccountLedger extends Model
         // say why it did not fall by the whole loan; it is not added to
         // anything, because not subtracting it is what keeps it there.
         $stmt = $pdo->prepare(
-            "SELECT COALESCE(SUM(
-                        CASE WHEN COALESCE(total_repayment, 0) > 0
-                             THEN GREATEST(COALESCE(loan_amount, 0)
-                                           - GREATEST(COALESCE(total_repayment, 0) - COALESCE(total_interest, 0), 0), 0)
-                             ELSE 0
-                        END), 0)
+            "SELECT COALESCE(SUM(" . self::LOAN_INTEREST_HELD . "), 0)
                FROM loans
               WHERE delflag = 0 AND status IN ('active', 'overdue', 'closed')"
         );
@@ -192,7 +287,7 @@ class AccountLedger extends Model
         // with the chit receipts shown on their own line.
         $customCashIn = $ledgerCashIn;
         $otherCashIn  = $ledgerCashIn - $chitCollected;
-        $otherCashOut = $customCashOut - $chitPayouts;
+        $otherCashOut = $customCashOut - $chitPayouts - $fundPayouts;
 
         // 6. Active Loans Outstanding
         $stmt = $pdo->prepare("SELECT COUNT(*) as count, COALESCE(SUM(outstanding_balance), 0) as outstanding FROM loans WHERE delflag = 0 AND status = 'active'");
@@ -239,16 +334,17 @@ class AccountLedger extends Model
 
         $customLentNet = max(0, $customLentOut - $customLentCollected);
 
-        // Total Outstanding Money Lent (வெளி கடன்) — only debt the business is
-        // actually exposed on: a loan's principal already left the safe, a
-        // fund's deposit target is a maturity payout the business must
-        // eventually honor, and a custom entry is cash handed over by hand.
+        // Total Outstanding Money Lent (வெளி கடன்)
         //
-        // Chit pending is deliberately left out. `chit_groups.pending_amount`
-        // is contributions the group's own members have not yet paid in —
-        // money the business is waiting to collect, not money it disbursed —
-        // so it is reported on its own (chitPendingAmount) but never summed
-        // into "money lent".
+        // Only money the business actually handed over and is waiting to get
+        // back. A chit member's pending contribution is not that: it is money
+        // owed *into* the pot, which the business never lent and never paid
+        // out. Counting it here made "still out with customers" larger than
+        // anything the business had ever put out — ₹80,470 of it on live data,
+        // against ₹30,000 of real lending.
+        //
+        // `chitPendingAmount` is still reported; the Account Book shows it on
+        // its own card, where it means what it says.
         $outstandingMoneyLent = $totalLoanOutstanding + $fundPendingAmount + $customLentNet;
 
         // Net Balance (மொத்த இருப்பு) — the money the business actually holds.
@@ -273,6 +369,7 @@ class AccountLedger extends Model
             'customCashOut'          => $customCashOut,
             'otherCashOut'           => $otherCashOut,
             'chitPayouts'            => $chitPayouts,
+            'fundPayouts'            => $fundPayouts,
             'loansDisbursed'         => $loansDisbursed,
             'upfrontInterestHeld'    => $upfrontInterestHeld,
             'customLentDisbursed'    => $customLentDisbursed,
@@ -340,6 +437,7 @@ class AccountLedger extends Model
                 notes,
                 agent_name as collector,
                 1 as is_custom,
+                'account_ledger' as source_table,
                 created_at
             FROM account_ledger
             WHERE delflag = 0
@@ -360,6 +458,7 @@ class AccountLedger extends Model
                 CONCAT('Receipt: ', IFNULL(receipt_number, 'N/A'), ' | Method: ', UPPER(IFNULL(payment_method, 'CASH')), ' | Collector: ', IFNULL(agent_name, 'Direct')) as notes,
                 agent_name as collector,
                 0 as is_custom,
+                'collections' as source_table,
                 created_at
             FROM collections
             WHERE delflag = 0
@@ -380,9 +479,66 @@ class AccountLedger extends Model
                 CONCAT('Method: ', UPPER(IFNULL(payment_method, 'CASH')), ' | Collector: ', IFNULL(agent_name, 'Direct')) as notes,
                 agent_name as collector,
                 0 as is_custom,
+                'fund_payments' as source_table,
                 created_at
             FROM fund_payments
             WHERE delflag = 0
+        ";
+
+        // 4. Loan Disbursements — the money going the other way.
+        //
+        //    The book had three sources and all three were cash coming in:
+        //    collections, fund deposits, and whatever was typed into
+        //    account_ledger by hand. Handing a borrower their principal is the
+        //    single largest movement this business makes and it appeared in no
+        //    transaction at all, so Cash In Hand counted every rupee received
+        //    and none of the rupees lent. On this database that is ₹87,500
+        //    across nine loans against a book reading ₹7,420.
+        //
+        //    Derived from `loans` rather than written into `account_ledger` at
+        //    disbursement, for the same reason collections and fund deposits
+        //    are: there is then only one copy of the fact. Editing a loan's
+        //    amount, soft-deleting it or restoring it moves the book with it,
+        //    and no backfill is needed for loans that already exist.
+        //
+        //    The amount is LOAN_CASH_OUT, the same expression the Cash In Hand
+        //    card uses — what the borrower was actually handed. On a plan that
+        //    deducts the interest at disbursement that is ₹9,000 of a ₹10,000
+        //    loan, and the Create Loan screen says so to the borrower's face
+        //    before it is approved. `start_date` is the day the cash changed
+        //    hands, which is not always the day the row was created.
+        $queries[] = "
+            SELECT
+                id,
+                DATE(COALESCE(start_date, created_at)) as txn_date,
+                DATE(COALESCE(start_date, created_at)) as entry_date,
+                CONCAT('Loan Disbursement: ', IFNULL(customer_name, 'Customer'), ' (', IFNULL(loan_number, ''), ')') as title,
+                'loan' as module,
+                'Loan Disbursement' as category,
+                'cash_out' as txn_type,
+                'cash_out' as entry_type,
+                " . self::LOAN_CASH_OUT . " as amount,
+                CONCAT(
+                    'Handed over | Type: ', UPPER(IFNULL(loan_type, 'monthly')),
+                    ' | Principal: ', FORMAT(IFNULL(loan_amount, 0), 2),
+                    CASE WHEN " . self::LOAN_INTEREST_HELD . " > 0
+                         THEN CONCAT(' | Interest kept upfront: ', FORMAT(" . self::LOAN_INTEREST_HELD . ", 2))
+                         ELSE '' END,
+                    ' | Repayable: ', FORMAT(
+                        CASE WHEN COALESCE(total_repayment, 0) > 0
+                             THEN total_repayment
+                             ELSE (" . self::DERIVED_REPAYMENT . ")
+                        END, 2),
+                    ' | Agent: ', IFNULL(agent_name, 'Direct')
+                ) as notes,
+                agent_name as collector,
+                0 as is_custom,
+                'loans' as source_table,
+                created_at
+            FROM loans
+            WHERE delflag = 0
+              AND status <> 'pending'
+              AND (" . self::LOAN_CASH_OUT . ") > 0
         ";
 
         // Combine
@@ -584,6 +740,205 @@ class AccountLedger extends Model
         }
 
         return $outstanding;
+    }
+
+    /**
+     * The account book's own tables — the three the stream is a union of, and
+     * the only ones a delete from that screen may touch.
+     *
+     * A line in the account book is not always a ledger row. A loan collection
+     * and a fund deposit each live in their own table and are shown here
+     * because they moved cash. Deleting the line has to delete the movement it
+     * stands for, or the button would hide a payment that is still in the books.
+     */
+    private const DELETABLE = [
+        'account_ledger' => 'ledger entry',
+        'collections'    => 'loan collection',
+        'fund_payments'  => 'fund deposit',
+    ];
+
+    /**
+     * Tables that keep an `account_ledger` row's id and belong with it.
+     *
+     * A chit contribution, a chit prize and a fund payout each write their own
+     * record alongside the cash-book receipt. Nothing in the schema points back
+     * the other way, so a cascade cannot find them — but deleting the receipt on
+     * its own would put the money back into Cash In Hand while the payout record
+     * still claimed it had been paid. They go together, and are archived in the
+     * same snapshot so a restore brings the pair back.
+     */
+    private const LEDGER_LINKED = ['chit_payments', 'chit_auctions', 'fund_payouts'];
+
+    /**
+     * Move account book rows to the recycle bin.
+     *
+     * Archive first, then flag — and if the archive did not land, nothing is
+     * flagged. "Deleted but not restorable" is the one outcome a recycle bin
+     * exists to prevent, and RecycleBinService::capture() deliberately swallows
+     * its own errors so that it can never block a delete, which means the only
+     * way to know it worked is to look.
+     *
+     * Single deletes come through here too, so there is one path and one set of
+     * rules rather than a row button that behaves differently from the toolbar.
+     *
+     * $items are `['table' => …, 'id' => …]`; a bare id is read as a ledger row.
+     *
+     * @return array{deleted: array<int, array{table: string, id: string}>,
+     *               skipped: array<int, array{id: string, reason: string}>,
+     *               stale: bool}
+     */
+    public static function softDeleteMany(array $items, array $claims): array
+    {
+        $pdo = Database::pdo();
+
+        // ── what was asked for, grouped by table ──
+        $byTable = [];
+        $skipped = [];
+        foreach ($items as $item) {
+            if (is_scalar($item)) {
+                $table = 'account_ledger';
+                $id    = trim((string)$item);
+            } elseif (is_array($item)) {
+                $table = trim((string)($item['table'] ?? 'account_ledger'));
+                $id    = trim((string)($item['id'] ?? ''));
+            } else {
+                continue;
+            }
+            if ($id === '') continue;
+
+            if (!isset(self::DELETABLE[$table])) {
+                $skipped[] = ['id' => $id, 'reason' => "Entries from `$table` cannot be deleted here."];
+                continue;
+            }
+            $byTable[$table][$id] = $id;
+        }
+        if (!$byTable) return ['deleted' => [], 'skipped' => $skipped, 'stale' => false];
+
+        // ── load them ──
+        $doomed = [];
+        foreach ($byTable as $table => $ids) {
+            $ids   = array_values($ids);
+            $place = implode(',', array_fill(0, count($ids), '?'));
+            $stmt  = $pdo->prepare("SELECT * FROM `$table` WHERE `id` IN ($place)");
+            $stmt->execute($ids);
+            $rows = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) $rows[(string)$r['id']] = $r;
+
+            foreach ($ids as $id) {
+                if (!isset($rows[$id])) {
+                    $skipped[] = ['id' => $id, 'reason' => 'That entry no longer exists.'];
+                } elseif ((int)($rows[$id]['delflag'] ?? 0) === 1) {
+                    $skipped[] = ['id' => $id, 'reason' => 'That entry is already in the recycle bin.'];
+                } else {
+                    $doomed[] = ['table' => $table, 'row' => $rows[$id]];
+                }
+            }
+        }
+        if (!$doomed) return ['deleted' => [], 'skipped' => $skipped, 'stale' => false];
+
+        // Rows in other tables that go with a ledger row, found once up front so
+        // the archive and the delete agree on exactly what is moving.
+        $linkedFor = function (array $ledgerRow) use ($pdo): array {
+            $out = [];
+            foreach (self::LEDGER_LINKED as $table) {
+                try {
+                    $q = $pdo->prepare("SELECT * FROM `$table` WHERE `ledger_id` = ? AND COALESCE(`delflag`, 0) = 0");
+                    $q->execute([$ledgerRow['id']]);
+                    $rows = $q->fetchAll(PDO::FETCH_ASSOC);
+                    if ($rows) $out[$table] = $rows;
+                } catch (\Throwable $e) {
+                    // A table this server does not have links to nothing.
+                }
+            }
+            return $out;
+        };
+
+        $deleted  = [];
+        $loanIds  = [];
+        $fundIds  = [];
+        $groupIds = [];
+        $memberIds = [];
+
+        $pdo->beginTransaction();
+        try {
+            $seen = $pdo->prepare(
+                'SELECT COUNT(*) FROM `recycle_bin`
+                  WHERE `table_name` = ? AND `record_id` = ? AND `restored_at` IS NULL'
+            );
+            $now = date('Y-m-d H:i:s');
+            $by  = $claims['sub'] ?? null;
+
+            foreach ($doomed as $d) {
+                $table = $d['table'];
+                $row   = $d['row'];
+                $id    = (string)$row['id'];
+
+                $linked = $table === 'account_ledger' ? $linkedFor($row) : [];
+
+                $seen->execute([$table, $id]);
+                $before = (int)$seen->fetchColumn();
+
+                RecycleBinService::capture(
+                    $table,
+                    [$row],
+                    $claims,
+                    $linked ? (fn(array $r) => $linked) : null
+                );
+
+                $seen->execute([$table, $id]);
+                if ((int)$seen->fetchColumn() <= $before) {
+                    throw new \RuntimeException("Could not archive $id — nothing was deleted.");
+                }
+
+                $pdo->prepare(
+                    "UPDATE `$table` SET `delflag` = 1, `deleted_at` = ?, `deleted_by` = ?
+                      WHERE `id` = ? AND `delflag` = 0"
+                )->execute([$now, $by, $id]);
+
+                // Whatever was holding the receipt goes with it.
+                foreach ($linked as $childTable => $childRows) {
+                    foreach ($childRows as $child) {
+                        $pdo->prepare(
+                            "UPDATE `$childTable` SET `delflag` = 1, `deleted_at` = ?, `deleted_by` = ?
+                              WHERE `id` = ?"
+                        )->execute([$now, $by, $child['id']]);
+
+                        if (!empty($child['fund_id']))   $fundIds[]   = $child['fund_id'];
+                        if (!empty($child['group_id']))  $groupIds[]  = $child['group_id'];
+                        if (!empty($child['member_id'])) $memberIds[] = $child['member_id'];
+                    }
+                }
+
+                // Denormalised figures that no longer match what is left.
+                if ($table === 'collections'   && !empty($row['loan_id'])) $loanIds[] = $row['loan_id'];
+                if ($table === 'fund_payments' && !empty($row['fund_id'])) $fundIds[] = $row['fund_id'];
+
+                $deleted[] = ['table' => $table, 'id' => $id];
+            }
+
+            $pdo->commit();
+        } catch (\Throwable $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            json_error($e->getMessage(), 409);
+        }
+
+        // Recalculated after the commit, so a resync problem can never roll back
+        // a delete that already succeeded — the same order a restore uses.
+        $stale = false;
+        $step = function (callable $fn) use (&$stale) {
+            try { $fn(); } catch (\Throwable $e) {
+                $stale = true;
+                error_log('AccountLedger::softDeleteMany resync failed: ' . $e->getMessage());
+            }
+        };
+        $uniq = fn(array $v) => array_values(array_unique(array_filter($v)));
+
+        if ($loanIds = $uniq($loanIds)) $step(fn() => LoanRecalc::syncMany($loanIds));
+        foreach ($uniq($fundIds) as $f)  $step(fn() => FundService::recalc(Database::pdo(), (string)$f));
+        foreach ($uniq($memberIds) as $m) $step(fn() => ChitPassbookService::syncMember((string)$m, true));
+        foreach ($uniq($groupIds) as $g)  $step(fn() => ChitPassbookService::recalcGroupTotals((string)$g));
+
+        return ['deleted' => $deleted, 'skipped' => $skipped, 'stale' => $stale];
     }
 
     /**

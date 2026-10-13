@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 
@@ -66,8 +67,14 @@ class LocationService {
           'Location permission permanently denied. Enable it in browser/device settings.');
     }
 
+    // The Android app only declares ACCESS_COARSE_LOCATION (Google Play's
+    // Loans policy forbids precise location), and asking for GPS-level
+    // accuracy without ACCESS_FINE_LOCATION can fail outright — so Android
+    // asks for an approximate fix. Web and iOS keep high accuracy.
+    final isAndroid =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
     final pos = await Geolocator.getCurrentPosition(
-      desiredAccuracy: LocationAccuracy.high,
+      desiredAccuracy: isAndroid ? LocationAccuracy.low : LocationAccuracy.high,
     );
     return LocationResult(pos.latitude, pos.longitude);
   }

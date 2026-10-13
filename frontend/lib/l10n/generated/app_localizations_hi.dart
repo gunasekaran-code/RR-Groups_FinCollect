@@ -519,6 +519,9 @@ class AppLocalizationsHi extends AppLocalizations {
   String get dashboardStatPendingApprovals => 'लंबित स्वीकृतियां';
 
   @override
+  String get dashboardStatActiveCustomers => 'सक्रिय ग्राहक';
+
+  @override
   String get dashboardStatTotalLoanAmount => 'कुल ऋण राशि';
 
   @override
@@ -1489,6 +1492,28 @@ class AppLocalizationsHi extends AppLocalizations {
   String get collectionsSelectCustomerHint => 'ग्राहक चुनें';
 
   @override
+  String get collectionsCustomerSearchHint =>
+      'नाम, मोबाइल, ग्राहक आईडी या ऋण संख्या से खोजें';
+
+  @override
+  String get collectionsCustomerNoMatches => 'कोई मिलता-जुलता ग्राहक नहीं';
+
+  @override
+  String collectionsCustomerLoanCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count ऋण',
+      one: '1 ऋण',
+      zero: 'कोई ऋण नहीं',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get collectionsChangeCustomer => 'बदलें';
+
+  @override
   String get collectionsLoanNumberLabel => 'ऋण संख्या';
 
   @override
@@ -1614,11 +1639,19 @@ class AppLocalizationsHi extends AppLocalizations {
   String get collectionsPresetFullBalance => 'पूरा शेष';
 
   @override
+  String get collectionsPresetPenalty => 'जुर्माना';
+
+  @override
   String get collectionsPurposeMonthlyInterest => 'मासिक ब्याज भुगतान';
 
   @override
   String collectionsPaymentSummaryLine(String payment, String remaining) {
     return 'भुगतान: $payment • शेष राशि: $remaining';
+  }
+
+  @override
+  String collectionsPenaltySummaryLine(String payment, String remaining) {
+    return 'चुकाया जुर्माना: $payment • शेष जुर्माना: $remaining';
   }
 
   @override
@@ -2420,6 +2453,72 @@ class AppLocalizationsHi extends AppLocalizations {
       'परिपक्वता बोनस के साथ साप्ताहिक जमा बचत योजनाएँ';
 
   @override
+  String get fundColFundNo => 'फंड नं.';
+
+  @override
+  String get fundColWeekly => 'साप्ताहिक';
+
+  @override
+  String get fundColWeeks => 'सप्ताह';
+
+  @override
+  String get fundColBonus => 'बोनस';
+
+  @override
+  String get fundColDeposited => 'जमा';
+
+  @override
+  String get fundColPayout => 'भुगतान';
+
+  @override
+  String get fundColMaturity => 'परिपक्वता';
+
+  @override
+  String get fundStatusActive => 'सक्रिय';
+
+  @override
+  String get fundStatusMatured => 'परिपक्व';
+
+  @override
+  String get fundStatusClosed => 'बंद';
+
+  @override
+  String get chitColGroupNo => 'समूह नं.';
+
+  @override
+  String get chitColGroupName => 'समूह का नाम';
+
+  @override
+  String get chitColMonthly => 'मासिक';
+
+  @override
+  String get chitColCollected => 'एकत्रित';
+
+  @override
+  String get chitColStartDate => 'आरंभ तिथि';
+
+  @override
+  String get chitColStatus => 'स्थिति';
+
+  @override
+  String get chitColActions => 'कार्रवाइयां';
+
+  @override
+  String get chitColGroupValue => 'समूह मूल्य';
+
+  @override
+  String get chitStatusActive => 'सक्रिय';
+
+  @override
+  String get chitStatusCompleted => 'पूर्ण';
+
+  @override
+  String get chitStatusUpcoming => 'आगामी';
+
+  @override
+  String get chitActionEdit => 'संपादित करें';
+
+  @override
   String get fundCreateButton => 'फंड बनाएँ';
 
   @override
@@ -2465,6 +2564,22 @@ class AppLocalizationsHi extends AppLocalizations {
   String get fundCardMaturityPayout => 'परिपक्वता भुगतान';
 
   @override
+  String get fundCardMaturityPayoutPending => 'परिपक्वता भुगतान (पूरा होने पर)';
+
+  @override
+  String get fundCardClosurePayout => 'समापन भुगतान (कोई बोनस नहीं)';
+
+  @override
+  String fundCardPaidOut(String date) {
+    return 'भुगतान किया गया · $date';
+  }
+
+  @override
+  String fundCardPayOutButton(String amount) {
+    return 'भुगतान करें · $amount';
+  }
+
+  @override
   String fundCardDepositedProgress(String deposited, String total) {
     return 'जमा किए गए $deposited / $total';
   }
@@ -2477,7 +2592,7 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String fundCardSettleBanner(String amount) {
-    return 'पूरा सेटल करें · $amount शेष';
+    return 'बंद करें और सेटल करें · $amount शेष';
   }
 
   @override
@@ -2749,6 +2864,24 @@ class AppLocalizationsHi extends AppLocalizations {
   String get fundSettleSummaryPayoutToCustomer => 'ग्राहक को भुगतान';
 
   @override
+  String get fundSettleClosedPayoutSubtitleNoBonus =>
+      'जमा वापस — कोई बोनस नहीं';
+
+  @override
+  String get fundSettleSummaryDepositsReceived => 'प्राप्त जमा';
+
+  @override
+  String fundSettleSummaryBonusNotEarned(String amount) {
+    return 'अर्जित नहीं — पूरी अवधि से $amount कम';
+  }
+
+  @override
+  String fundSettleClosureHelper(String units, String maxUnits, String amount,
+      String remaining, String weekly) {
+    return '$maxUnits में से $units इकाइयाँ बंद करने पर अभी $amount का भुगतान होगा — नकद शेष उतना घट जाएगा। शेष $remaining इकाइयाँ $weekly प्रति सप्ताह जमा होती रहेंगी।';
+  }
+
+  @override
   String get fundSettleFailedTitle => 'बंद करने में विफल';
 
   @override
@@ -2788,10 +2921,26 @@ class AppLocalizationsHi extends AppLocalizations {
   }
 
   @override
-  String get fundPassbookSummaryBonus => '🎁 परिपक्वता बोनस (निपटान पर)';
+  String get fundPassbookSummaryBonus => '🎁 परिपक्वता बोनस';
 
   @override
   String get fundPassbookSummaryPayout => 'परिपक्वता भुगतान';
+
+  @override
+  String get fundPassbookSummaryPayableNow => 'अभी देय';
+
+  @override
+  String fundPassbookSummaryPaidOut(String date) {
+    return 'भुगतान किया गया · $date';
+  }
+
+  @override
+  String get fundPassbookBonusNotEarned => 'अर्जित नहीं — जल्दी बंद किया गया';
+
+  @override
+  String fundPassbookPaidOutVia(String method, String date) {
+    return '$method · $date';
+  }
 
   @override
   String get fundPassbookNextDuePrefix => 'अगली जमा देय · ';
@@ -3837,4 +3986,132 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get addMemberFailedTitle => 'Add member failed';
+
+  @override
+  String get custDashTitle => 'मेरा डैशबोर्ड';
+
+  @override
+  String get custDashGoodMorning => 'सुप्रभात';
+
+  @override
+  String get custDashGoodAfternoon => 'शुभ दोपहर';
+
+  @override
+  String get custDashGoodEvening => 'शुभ संध्या';
+
+  @override
+  String custDashGreeting(String greeting, String name) {
+    return '$greeting, $name';
+  }
+
+  @override
+  String custDashNextInstallment(String amount, String date) {
+    return 'आपकी अगली किस्त $amount की है, जो $date को देय है।';
+  }
+
+  @override
+  String get custDashViewMyLoans => 'मेरे ऋण देखें';
+
+  @override
+  String get custDashActiveLoans => 'सक्रिय ऋण';
+
+  @override
+  String get custDashOutstanding => 'बकाया';
+
+  @override
+  String get custDashPenalty => 'जुर्माना';
+
+  @override
+  String get custDashTotalOutstanding => 'कुल बकाया';
+
+  @override
+  String get custDashNextEmi => 'अगली ईएमआई';
+
+  @override
+  String get custDashTotalPaid => 'कुल भुगतान';
+
+  @override
+  String get custDashPaid => 'भुगतान किया';
+
+  @override
+  String get custDashBalance => 'शेष';
+
+  @override
+  String get custDashPending => 'लंबित';
+
+  @override
+  String get custDashTotal => 'कुल';
+
+  @override
+  String get custDashRepaymentProgress => 'पुनर्भुगतान प्रगति';
+
+  @override
+  String get custDashRepaymentProgressSub => 'भुगतान बनाम चुकाने को शेष';
+
+  @override
+  String get custDashInstallmentStatus => 'किस्त स्थिति';
+
+  @override
+  String get custDashInstallmentStatusSub => 'आपकी पूरी अनुसूची में';
+
+  @override
+  String get custDashMyLoans => 'मेरे ऋण';
+
+  @override
+  String get custDashMyLoansSub => 'आपके सभी ऋण खाते';
+
+  @override
+  String get custDashViewAll => 'सभी देखें';
+
+  @override
+  String get custDashNoLoans => 'आपके पास अभी कोई ऋण नहीं है।';
+
+  @override
+  String custDashEmiAmount(String amount) {
+    return 'ईएमआई $amount';
+  }
+
+  @override
+  String get custDashUpcoming => 'आगामी किस्तें';
+
+  @override
+  String get custDashUpcomingSub => 'अगले देय भुगतान';
+
+  @override
+  String get custDashFullSchedule => 'पूरी अनुसूची';
+
+  @override
+  String get custDashNoUpcoming => 'कोई आगामी किस्त नहीं।';
+
+  @override
+  String custDashDueOn(String date) {
+    return 'देय $date';
+  }
+
+  @override
+  String get custDashRecentPayments => 'हाल के भुगतान';
+
+  @override
+  String get custDashRecentPaymentsSub => 'आपका भुगतान इतिहास';
+
+  @override
+  String get custDashNoPayments => 'अभी तक कोई भुगतान दर्ज नहीं।';
+
+  @override
+  String get custDashStatusActive => 'सक्रिय';
+
+  @override
+  String get custDashStatusClosed => 'बंद';
+
+  @override
+  String get custDashStatusOverdue => 'अतिदेय';
+
+  @override
+  String get custDashStatusPending => 'लंबित';
+
+  @override
+  String get custDashStatusPartial => 'आंशिक';
+
+  @override
+  String get custDashStatusPaid => 'भुगतान किया';
 }

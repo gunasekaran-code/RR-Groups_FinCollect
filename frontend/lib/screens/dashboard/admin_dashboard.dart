@@ -8,6 +8,8 @@ import '../../models/report_model.dart';
 import '../../routes/app_routes.dart';
 import '../../models/account_ledger_model.dart';
 import '../../services/account_ledger_service.dart';
+import '../../services/api_client.dart';
+import '../../services/customer_api_service.dart';
 import '../../services/report_service.dart';
 import '../../services/session_service.dart';
 import '../Promotional Popup/promotional_popup.dart';
@@ -15,6 +17,7 @@ import '../../theme/app_theme.dart';
 import '../../widgets/app_shell.dart';
 import '../../widgets/stat_card.dart';
 import '../../l10n/generated/app_localizations.dart';
+import '../../widgets/responsive_stat_grid.dart';
 
 String formatIndianCurrency(double? amount) {
   if (amount == null) return '₹0';
@@ -66,8 +69,62 @@ class _DashboardScreenState extends State<DashboardScreen> {
       end: today,
     );
     final ledger = await AccountLedgerService().fetchSummary();
+    final customers = await CustomerApiService().fetchAll();
+    // A customer is inactive when their login is switched off
+    // (profiles.status = 'inactive'). Only the ids are fetched — the count
+    // is all the card needs.
+    final inactiveProfiles = await ApiClient.instance.list(
+      'profiles',
+      query: {
+        'select': 'id',
+        'role': 'eq.customer',
+        'status': 'eq.inactive',
+      },
+    );
+    final inactiveCustomers = inactiveProfiles.length;
+    // Every loan ever given (deleted ones excluded by the API), not just
+    // this month's — only the columns the two cards need are fetched.
+    final loanTotals = await ApiClient.instance.list(
+      'loans',
+      query: {
+        'select': 'loan_amount,total_interest,total_repayment,'
+            'outstanding_balance,status,loan_type,loan_duration',
+      },
+    );
+    double sumOf(String column) => loanTotals.fold<double>(
+          0,
+          (sum, row) =>
+              sum + (double.tryParse(row[column]?.toString() ?? '') ?? 0),
+        );
+    final totalLoanAmount = sumOf('loan_amount');
+    // Interest actually earned so far — the web dashboard's "Interest
+    // Earned", same rule, so the two always agree.
+    final totalInterest = _round2(loanTotals.fold<double>(
+      0,
+      (sum, row) => sum + _interestEarned(row),
+    ));
+    // The latest 5 of each, whatever day they fall on — newest first.
+    final recentCollections = await ApiClient.instance.list(
+      'collections',
+      query: {'order': 'collection_date.desc,created_at.desc', 'limit': '5'},
+    );
+    final recentLoans = await ApiClient.instance.list(
+      'loans',
+      query: {'order': 'created_at.desc', 'limit': '5'},
+    );
     return _DashboardData(
-        daily: daily, monthly: monthly, agent: agent, ledger: ledger);
+      daily: daily,
+      monthly: monthly,
+      agent: agent,
+      ledger: ledger,
+      totalCustomers: customers.length,
+      inactiveCustomers: inactiveCustomers,
+      totalLoanAmount: totalLoanAmount,
+      interestEarned: totalInterest,
+      recentCollections:
+          recentCollections.map(CollectionEntry.fromJson).toList(),
+      recentLoans: recentLoans.map(NewLoanEntry.fromJson).toList(),
+    );
   }
 
   Future<void> _refresh() async {
@@ -355,10 +412,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       _buildQuickActionsCard(context, l10n),
                       const SizedBox(height: 16),
                       _buildRecentCollectionsCard(
-                          context, data.daily.collections, l10n),
+                          context, data.recentCollections, l10n),
                       const SizedBox(height: 16),
                       _buildRecentLoansCard(
-                          context, data.daily.newLoans, l10n),
+                          context, data.recentLoans, l10n),
                     ],
                   ],
                 ),
@@ -513,17 +570,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _buildStatGrid(_DashboardData data, AppLocalizations l10n) {
     final daily = data.daily;
     final monthly = data.monthly;
-    final activeLoans = monthly.summary.activeLoans;
     final overdueLoans = monthly.summary.overdueLoans;
-    final totalLoans = activeLoans + overdueLoans;
+    // Every loan still running — on time or overdue — as the web dashboard
+    // counts it (e.g. 36 active + 9 overdue = 45).
+    final activeLoans = monthly.summary.activeLoans + overdueLoans;
 
-    return GridView.count(
-      crossAxisCount: 2,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      mainAxisSpacing: 12,
-      crossAxisSpacing: 12,
-      childAspectRatio: 1.15,
+    return ResponsiveStatGrid(
       children: [
         StatCard(
           label: l10n.dashboardStatActiveLoans,
@@ -533,8 +585,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           iconBackground: const Color(0xFFDCEAFE),
         ),
         StatCard(
-          label: l10n.dashboardStatNewCustomers,
-          value: '${monthly.summary.newCustomers}',
+          label: l10n.customersStatTotal,
+          value: '${data.totalCustomers}',
           icon: Icons.people_outline,
           iconColor: Colors.blue,
           iconBackground: const Color(0xFFDCEAFE),
@@ -554,22 +606,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
           iconBackground: const Color(0xFFFEE2E2),
         ),
         StatCard(
-          label: l10n.dashboardStatPendingApprovals,
-          value: '$totalLoans',
-          icon: Icons.access_time_rounded,
+          label: l10n.customersStatInactive,
+          value: '${data.inactiveCustomers}',
+          icon: Icons.how_to_reg_outlined,
           iconColor: Colors.orange,
           iconBackground: const Color(0xFFFEF3C7),
         ),
         StatCard(
           label: l10n.dashboardStatTotalLoanAmount,
-          value: formatIndianCurrency(monthly.summary.disbursement),
+          value: formatIndianCurrency(data.totalLoanAmount),
           icon: Icons.credit_card_outlined,
           iconColor: const Color(0xFF7C3AED),
           iconBackground: const Color(0xFFEDE9FE),
         ),
         StatCard(
           label: l10n.dashboardStatInterestRevenue,
-          value: formatIndianCurrency(monthly.summary.interest),
+          value: formatIndianCurrency(data.interestEarned),
           icon: Icons.trending_up_rounded,
           iconColor: Colors.green,
           iconBackground: const Color(0xFFDCFCE7),
@@ -705,9 +757,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildAgentPerformanceCard(
       AgentReport agentReport, AppLocalizations l10n) {
+    // The report gives each agent's collected rupees. Bars are sized against
+    // the top collector and labelled with the amount itself.
+    final maxCollected = agentReport.chart
+        .fold<double>(0, (m, e) => e.value > m ? e.value : m);
     final data = agentReport.chart
-        .map((e) =>
-            _BarDatum(e.label, _scaleValue(e.value), color: AppColors.kInfo))
+        .map((e) => _BarDatum(
+              e.label,
+              maxCollected <= 0 ? 0 : _scaleValue(e.value) / maxCollected,
+              color: AppColors.kInfo,
+              valueLabel: formatIndianCurrency(e.value),
+            ))
         .toList();
     return _glassCard(
       child: Column(
@@ -740,11 +800,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
-                  Text('${(d.value * 100).round()}%',
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: barColor)),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(d.valueLabel ?? '${(d.value * 100).round()}%',
+                        maxLines: 1,
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: barColor)),
+                  ),
                   const SizedBox(height: 6),
                   SizedBox(
                     height: chartHeight,
@@ -1036,6 +1100,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return values.map((v) => v / maxValue).toList();
   }
 
+  static double _round2(double n) => (n * 100).roundToDouble() / 100;
+
+  static double _num(dynamic v) => double.tryParse(v?.toString() ?? '') ?? 0;
+
+  /// Interest one loan has earned so far (mirrors the web dashboard):
+  /// - pending loans have earned nothing yet;
+  /// - weekly loans, and daily loans of 100+ days, take the interest
+  ///   upfront, so all of it is earned at disbursement;
+  /// - every other loan earns it in proportion to what has been repaid.
+  static double _interestEarned(Map<String, dynamic> loan) {
+    if ((loan['status'] ?? '').toString() == 'pending') return 0;
+    final interest = _num(loan['total_interest']);
+    if (interest <= 0) return 0;
+
+    final type = (loan['loan_type'] ?? '').toString().toLowerCase();
+    final days = _num(loan['loan_duration']);
+    final upfront =
+        type == 'weekly' || (type == 'daily' && (days > 0 ? days : 60) >= 100);
+    if (upfront) return _round2(interest);
+
+    final repayment = _num(loan['total_repayment']);
+    if (repayment <= 0) return 0;
+    final repaid = math.max(0.0, repayment - _num(loan['outstanding_balance']));
+    return _round2(math.min(interest, interest * (repaid / repayment)));
+  }
+
   double _scaleValue(double value) {
     if (value <= 0) return 0;
     return value;
@@ -1054,12 +1144,24 @@ class _DashboardData {
     required this.monthly,
     required this.agent,
     required this.ledger,
+    required this.totalCustomers,
+    required this.inactiveCustomers,
+    required this.totalLoanAmount,
+    required this.interestEarned,
+    required this.recentCollections,
+    required this.recentLoans,
   });
 
   final DailyReport daily;
   final MonthlyReport monthly;
   final AgentReport agent;
   final AccountLedgerSummary ledger;
+  final int totalCustomers;
+  final int inactiveCustomers;
+  final double totalLoanAmount;
+  final double interestEarned;
+  final List<CollectionEntry> recentCollections;
+  final List<NewLoanEntry> recentLoans;
 }
 
 class _DonutSlice {
@@ -1071,9 +1173,10 @@ class _DonutSlice {
 
 class _BarDatum {
   final String label;
-  final double value;
+  final double value; // bar height, 0..1
   final Color? color;
-  const _BarDatum(this.label, this.value, {this.color});
+  final String? valueLabel; // shown above the bar; defaults to value as %
+  const _BarDatum(this.label, this.value, {this.color, this.valueLabel});
 }
 
 class _QuickAction {

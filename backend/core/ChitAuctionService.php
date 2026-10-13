@@ -336,14 +336,25 @@ class ChitAuctionService
 
             // Guarded on status as well as id: two clicks racing each other
             // would otherwise both pass the check above and pay twice.
+            // "Overwrite the note only if one was typed" is a decision PHP
+            // can make. Expressing it as COALESCE(NULLIF(?, ''), `notes`) made
+            // the database compare a bound string with a column, and those two
+            // carry different collations whenever the database's own default
+            // differs from the one the schema gives its columns — which is the
+            // normal state of a cPanel database. The payout then failed outright
+            // rather than degrading. Nothing here needs the comparison.
+            $setNotes = $notes !== '' ? ", `notes` = ?" : '';
+            $binds    = [$payDate, $method, $ledgerId, $agentId, $agentName];
+            if ($notes !== '') $binds[] = $notes;
+            $binds[] = $auctionId;
+
             $stmt = $pdo->prepare(
                 "UPDATE `chit_auctions`
                     SET `status` = 'settled', `payout_date` = ?, `payment_method` = ?,
-                        `ledger_id` = ?, `agent_id` = ?, `agent_name` = ?,
-                        `notes` = COALESCE(NULLIF(?, ''), `notes`)
+                        `ledger_id` = ?, `agent_id` = ?, `agent_name` = ?$setNotes
                   WHERE `id` = ? AND `status` <> 'settled'"
             );
-            $stmt->execute([$payDate, $method, $ledgerId, $agentId, $agentName, $notes, $auctionId]);
+            $stmt->execute($binds);
             if ($stmt->rowCount() === 0) {
                 throw new \RuntimeException('That prize was paid out by someone else a moment ago');
             }

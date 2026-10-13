@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../routes/app_routes.dart';
 import '../../theme/app_theme.dart';
 import '../../services/session_service.dart';
+import '../../widgets/app_update_dialog.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -27,6 +28,9 @@ class _SplashScreenState extends State<SplashScreen>
   late final Animation<double> _goldWaveShift;
 
   bool _exiting = false;
+
+  // Store version check runs alongside the intro animation.
+  late final Future<bool> _updateCheck = AppUpdateChecker.isUpdateAvailable();
 
   @override
   void initState() {
@@ -85,6 +89,7 @@ class _SplashScreenState extends State<SplashScreen>
       CurvedAnimation(parent: _goldController, curve: Curves.easeInOutCubic),
     );
 
+    _updateCheck; // start the store lookup now
     _introController.forward();
     _scheduleSequence();
   }
@@ -100,6 +105,14 @@ class _SplashScreenState extends State<SplashScreen>
 
     // Sit on the gold screen for a beat.
     await Future.delayed(const Duration(milliseconds: 900));
+    if (!mounted) return;
+
+    // A newer version on the store blocks the app until the user updates.
+    if (await _updateCheck) {
+      if (!mounted) return;
+      await AppUpdateChecker.showUpdateDialog(context);
+      return;
+    }
     if (!mounted) return;
 
     setState(() => _exiting = true);

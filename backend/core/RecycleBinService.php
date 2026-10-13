@@ -34,8 +34,17 @@ class RecycleBinService
     /**
      * Archive rows that are about to be deleted.
      * Must be called BEFORE the DELETE runs.
+     *
+     * $extraChildren is for rows that belong together without a foreign key
+     * saying so. A fund payout and a chit prize each keep the id of the
+     * `account_ledger` cash_out they wrote, but nothing in the schema points
+     * the other way, so the cascade walk cannot find them. Deleting the receipt
+     * has to take the payout record with it — otherwise the money returns to
+     * Cash In Hand while the payout still claims to have been paid — and
+     * restoring has to bring both back together. Given the row being archived,
+     * it returns `[childTable => [rows]]`.
      */
-    public static function capture(string $table, array $rows, array $claims): void
+    public static function capture(string $table, array $rows, array $claims, ?callable $extraChildren = null): void
     {
         if ($table === 'recycle_bin' || !$rows) return;
 
@@ -63,7 +72,17 @@ class RecycleBinService
                 $raw = self::rawRow($table, $id);
                 if ($raw === null) continue;
 
-                $children  = self::cascadeChildren($table, $id, 0);
+                $children = self::cascadeChildren($table, $id, 0);
+
+                if ($extraChildren) {
+                    foreach ((array)$extraChildren($raw) as $childTable => $childRows) {
+                        if (!$childRows) continue;
+                        $children[$childTable] = array_merge($children[$childTable] ?? [], $childRows);
+                    }
+                }
+
+                self::attachLedgerRows($table, $raw, $children);
+
                 $childCount = 0;
                 foreach ($children as $kids) $childCount += count($kids);
 
@@ -173,9 +192,21 @@ class RecycleBinService
             }
         }
 
-        $loanIds = $customerIds = $memberIds = $groupIds = [];
+        $loanIds = $customerIds = $memberIds = $groupIds = $fundIds = [];
         foreach ($all as [$t, $r]) {
             switch ($t) {
+                // A fund's collected_amount and status are derived from its
+                // deposits less anything a partial closure handed back, so
+                // restoring either side has to re-derive them.
+                case 'fund_payments':
+                case 'fund_payouts':
+                    $fundIds[] = $r['fund_id'] ?? null;
+                    break;
+
+                case 'chit_auctions':
+                    $groupIds[] = $r['group_id'] ?? null;
+                    break;
+
                 case 'loans':
                     $loanIds[]     = $r['id'] ?? null;
                     $customerIds[] = $r['customer_id'] ?? null;
@@ -209,6 +240,7 @@ class RecycleBinService
         $customerIds = $clean($customerIds);
         $memberIds   = $clean($memberIds);
         $groupIds    = $clean($groupIds);
+        $fundIds     = $clean($fundIds);
 
         $failed = false;
         $step = function (callable $fn) use (&$failed) {
@@ -235,10 +267,71 @@ class RecycleBinService
         // 'none' their directory row was left showing.
         if ($customerIds) $step(fn() => Customer::recalcLoanStatus($customerIds));
 
+        // A restored deposit puts the fund's running total back up, and may
+        // take it back to `matured`; a restored payout freezes it again.
+        foreach ($fundIds as $f) {
+            $step(fn() => FundService::recalc(Database::pdo(), (string)$f));
+        }
+
         return $failed;
     }
 
     // ── internals ────────────────────────────────────────────────────
+
+    /**
+     * Pull in the `account_ledger` rows this set is counted from.
+     *
+     * Cash In Hand does not sum `chit_payments`, `chit_auctions` or
+     * `fund_payouts`. Each of those wrote a cash-book row and kept only its
+     * id, and that row is where the money is. No foreign key points back, so
+     * the cascade walk cannot reach them: a restored chit group came back with
+     * its contributions listed and none of the cash — and the delete before it
+     * had left the cash in the book with no record to explain it.
+     *
+     * The snapshot is taken before anything is flagged, so the rows archived
+     * here still read delflag = 0 and the restore's upsert un-flags them.
+     */
+    private static function attachLedgerRows(string $table, array $parent, array &$children): void
+    {
+        // Deleting a ledger row is the other direction, and belongs to
+        // AccountLedger::softDeleteMany() — which archives the payout record as
+        // a child of the receipt. Following the link from here as well would
+        // put the receipt inside its own snapshot.
+        if ($table === 'account_ledger') return;
+
+        $seen = [];
+        foreach ($children['account_ledger'] ?? [] as $r) {
+            if (!empty($r['id'])) $seen[(string)$r['id']] = true;
+        }
+
+        $wanted  = [];
+        $collect = function (string $t, array $row) use (&$wanted, $seen) {
+            $col = LEDGER_LINKED_TABLES[$t] ?? null;
+            if ($col === null) return;
+            $id = $row[$col] ?? null;
+            if (is_string($id) && $id !== '' && empty($seen[$id])) $wanted[$id] = $id;
+        };
+
+        $collect($table, $parent);
+        foreach ($children as $childTable => $rows) {
+            foreach ((array)$rows as $row) {
+                if (is_array($row)) $collect((string)$childTable, $row);
+            }
+        }
+        if (!$wanted) return;
+
+        try {
+            $ph = implode(',', array_fill(0, count($wanted), '?'));
+            $st = Database::pdo()->prepare("SELECT * FROM `account_ledger` WHERE `id` IN ($ph)");
+            $st->execute(array_values($wanted));
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            if ($rows) {
+                $children['account_ledger'] = array_merge($children['account_ledger'] ?? [], $rows);
+            }
+        } catch (\Throwable $e) {
+            // A receipt that cannot be read must not stop the record being archived.
+        }
+    }
 
     private static function rawRow(string $table, $id): ?array
     {
@@ -420,6 +513,18 @@ class RecycleBinService
                 $parts = ['Cash handover'];
                 if (!empty($row['total_amount']))   $parts[] = $money($row['total_amount']);
                 if (!empty($row['handover_date']))  $parts[] = (string)$row['handover_date'];
+                return self::join($parts);
+
+            case 'account_ledger':
+                // The title alone is what the fallback would pick, and two
+                // entries called "Office rent" are indistinguishable in a bin.
+                // The amount and its direction are what an admin restores by.
+                $type  = strtolower((string)($row['entry_type'] ?? ''));
+                $isOut = str_contains($type, 'out') || $type === 'expense';
+                $parts = [$row['title'] ?? 'Ledger entry'];
+                if (!empty($row['amount'])) $parts[] = ($isOut ? '− ' : '+ ') . $money($row['amount']);
+                if (!empty($row['category']))   $parts[] = (string)$row['category'];
+                if (!empty($row['entry_date'])) $parts[] = (string)$row['entry_date'];
                 return self::join($parts);
 
             case 'push_subscriptions':

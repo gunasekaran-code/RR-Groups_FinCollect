@@ -26,6 +26,10 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>RR Groups saves customer documents and photos to your Photos.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>RR Groups saves customer documents and photos to an album in your Photos.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>RR Groups uses your location to capture customer coordinates and plan agent routes.</string>
 	<key>UIApplicationSceneManifest</key>

@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:http/http.dart' as http;
 import 'l10n/generated/app_localizations.dart';
 import 'models/user_role.dart';
 import 'routes/app_routes.dart';
+import 'services/connectivity_service.dart';
 import 'services/session_service.dart';
+import 'services/session_http_client.dart';
 import 'services/branding_service.dart';
 import 'theme/app_theme.dart';
 import 'theme/glass_toast.dart';
@@ -35,12 +38,37 @@ import 'screens/settings/settings_screen.dart';
 import 'screens/settings/profile_page.dart';
 import 'widgets/app_shell.dart';
 import 'screens/agent/agent_page.dart';
+import 'package:upgrader/upgrader.dart';
 
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await SessionService.instance.restoreFromStorage();
-  await BrandingService.instance.initialize();
-  runApp(const FinCollectApp());
+Future<void> main() {
+  // Every request the app makes goes through SessionAwareHttpClient, so an
+  // expired token is caught once here instead of in each API service. The
+  // binding and runApp have to be inside the zone for the top-level `http`
+  // helpers used by those services to pick the client up.
+  return http.runWithClient(
+    () async {
+      WidgetsFlutterBinding.ensureInitialized();
+      SessionService.instance.onSessionExpired = () async {
+        final navigator = ToastService.navigatorKey.currentState;
+        navigator?.pushNamedAndRemoveUntil(AppRoutes.login, (route) => false);
+      };
+      // Startup work must never keep runApp from running: an exception or a
+      // hang here would leave the app stuck on the white launch screen.
+      try {
+        await SessionService.instance
+            .restoreFromStorage()
+            .timeout(const Duration(seconds: 10));
+      } catch (_) {}
+      try {
+        await BrandingService.instance
+            .initialize()
+            .timeout(const Duration(seconds: 5));
+      } catch (_) {}
+      ConnectivityService.instance.start();
+      runApp(const FinCollectApp());
+    },
+    () => SessionAwareHttpClient(http.Client()),
+  );
 }
 
 class FinCollectApp extends StatelessWidget {
@@ -58,7 +86,7 @@ class FinCollectApp extends StatelessWidget {
               navigatorKey: ToastService.navigatorKey,
               onGenerateTitle: (context) =>
                   AppLocalizations.of(context).appTitle,
-              debugShowCheckedModeBanner: true,
+              debugShowCheckedModeBanner: false,
               theme: AppTheme.light,
               darkTheme: AppTheme.dark,
               themeMode: themeMode,
@@ -163,7 +191,11 @@ class FinCollectApp extends StatelessWidget {
         break;
       case AppRoutes.settings:
         page = _guarded(
-            const SettingsScreen(), const [UserRole.owner, UserRole.admin]);
+            const SettingsScreen(), const [
+              UserRole.owner, 
+              UserRole.admin, 
+              UserRole.agent, 
+              UserRole.customer]);
         break;
       case AppRoutes.profile:
         page = _guarded(

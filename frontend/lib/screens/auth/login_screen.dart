@@ -63,8 +63,8 @@ class _LoginScreenState extends State<LoginScreen> {
       _error = null;
     });
     try {
-      // AuthApiService.login() saves the token + raw profile JSON to
-      // SharedPreferences. We also translate it into your AppUser model
+      // AuthApiService.login() saves the token and profile securely. We also
+      // translate the profile into your AppUser model
       // and push it into SessionService, so the _guarded() role checks
       // in main.dart work exactly like they did with the static demo users.
       final data = await AuthApiService.instance.login(
@@ -167,7 +167,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               valueListenable: BrandingService.instance.branding,
                               builder: (context, branding, _) => Column(
                                 children: [
-                                  _LoginBrandLogo(logoUrl: branding.logoUrl),
+                                  const _LoginBrandLogo(),
                                   const SizedBox(height: 20),
                                   const Text(
                                     'Welcome Back',
@@ -490,59 +490,33 @@ class _LoginScreenState extends State<LoginScreen> {
 }
 
 class _LoginBrandLogo extends StatelessWidget {
-  final String? logoUrl;
-
-  const _LoginBrandLogo({required this.logoUrl});
+  const _LoginBrandLogo();
 
   @override
   Widget build(BuildContext context) {
-    final url = logoUrl;
-
-    Widget childWidget;
-    if (url != null && url.isNotEmpty) {
-      if (url.startsWith('data:')) {
-        try {
-          childWidget = Image.memory(
-            base64Decode(url.substring(url.indexOf(',') + 1)),
-            fit: BoxFit.cover,
-            width: 78,
-            height: 78,
-            errorBuilder: (_, __, ___) => _fallbackIcon(),
-          );
-        } catch (_) {
-          childWidget = _fallbackIcon();
-        }
-      } else {
-        childWidget = Image.network(
-          url,
-          fit: BoxFit.cover,
-          width: 42,
-          height: 42,
-          errorBuilder: (_, __, ___) => _fallbackIcon(),
-        );
-      }
-    } else {
-      childWidget = _fallbackIcon();
-    }
-
     return Container(
-      width: 84,
-      height: 84,
+      width:88,
+      height: 88,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: AppColors.gold100.withValues(alpha: 0.6),
+        color: Colors.white,
+        border: Border.all(color: AppColors.gold100, width: 1.5),
       ),
       child: Center(
         child: ClipOval(
-          child: childWidget,
+          child: Image.asset(
+            'assets/images/logo_app_icon.png',
+            fit: BoxFit.cover,
+            width: 100, // Adjust width and height if needed based on your logo's aspect ratio
+            height: 100,
+            errorBuilder: (context, error, stackTrace) => const Icon(
+              Icons.lock_person_rounded,
+              color: AppColors.gold600,
+              size: 38,
+            ),
+          ),
         ),
       ),
     );
   }
-
-  Widget _fallbackIcon() => const Icon(
-        Icons.lock_person_rounded,
-        color: AppColors.gold600,
-        size: 38,
-      );
 }

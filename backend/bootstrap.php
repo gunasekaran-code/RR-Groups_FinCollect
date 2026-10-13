@@ -321,8 +321,78 @@ function ensure_loan_penalty_columns(): void
     }
 }
 
+/**
+ * How much of a receipt was a late fee rather than a repayment.
+ *
+ * Without this the two are indistinguishable, and the cascade treats the whole
+ * receipt as money off the loan. A ₹1,300 instalment collected with its ₹100
+ * penalty took ₹1,400 off a ₹13,000 loan — so the customer paid the fee and
+ * got it credited against her own debt, and the business recorded no penalty
+ * income at all. The fee was a number on a screen and nothing else.
+ */
+/**
+ * Extra contact numbers, beside the primary one.
+ *
+ * A borrower often leaves two or three numbers — their own, a son's, the shop
+ * line — and only one of them answers. They used to be crammed into `mobile`
+ * or into the address, where nothing could dial them and search could not
+ * match them.
+ *
+ * `mobile` is deliberately untouched. It is the number sign-in resolves
+ * (Profile::findByIdentifier) and the one uniqueness is checked against, so
+ * keeping the extras in their own column means adding a contact number can
+ * never change who can log in or collide with somebody else's login.
+ *
+ * Stored as digits separated by commas. A small, fixed list that is only ever
+ * read whole belongs with its row; a side table would buy nothing here and
+ * cost a join on every customer read.
+ */
+function ensure_alt_mobiles_columns(): void
+{
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    try {
+        $pdo = Database::pdo();
+        foreach (['customers', 'profiles'] as $table) {
+            $stmt = $pdo->query("SHOW COLUMNS FROM `$table` LIKE 'alt_mobiles'");
+            if ($stmt && $stmt->rowCount() === 0) {
+                $pdo->exec(
+                    "ALTER TABLE `$table`
+                        ADD COLUMN `alt_mobiles` VARCHAR(191) NULL DEFAULT NULL
+                        AFTER `mobile`"
+                );
+            }
+        }
+    } catch (\Throwable $e) {
+        // Silently ignore schema check errors
+    }
+}
+function ensure_collection_penalty_column(): void
+{
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    try {
+        $pdo = Database::pdo();
+        $stmt = $pdo->query("SHOW COLUMNS FROM collections LIKE 'penalty_amount'");
+        if ($stmt && $stmt->rowCount() === 0) {
+            $pdo->exec(
+                "ALTER TABLE collections
+                    ADD COLUMN `penalty_amount` DECIMAL(14,2) NOT NULL DEFAULT 0.00
+                    AFTER `collection_amount`"
+            );
+        }
+    } catch (\Throwable $e) {
+        // Silently ignore schema check errors
+    }
+}
 ensure_chit_schedules_table();
 ensure_funds_units_column();
+ensure_alt_mobiles_columns();
+ensure_collection_penalty_column();
 ensure_popup_settings_columns();
 /**
  * Attribution columns on `account_ledger`.
@@ -742,6 +812,141 @@ function ensure_chit_auctions_table(): void
 }
 
 ensure_chit_auctions_table();
+
+/**
+ * Fund payouts — the money going back OUT to the customer.
+ *
+ * `fund_payments` is the passbook of deposits coming IN, and Cash In Hand sums
+ * it as cash received. A maturity or closure payout was being written into that
+ * same table, so handing a customer their money back *raised* Cash In Hand by
+ * the amount paid out, and the passbook showed a ₹6,000 "deposit" on the day
+ * the fund was emptied. Money leaving needs its own record, exactly as a chit
+ * prize does.
+ *
+ * One row per payout rather than a set of columns on `funds`, because a fund
+ * can be closed a few units at a time: each closure hands over its own share
+ * and the fund carries on. `ledger_id` links to the account_ledger cash_out
+ * that actually moved the cash, so the money is counted once and can be traced
+ * from either end.
+ *
+ * The CASCADE key is not decoration: the recycle bin, soft_delete_cascade() and
+ * restore all derive what a delete carries with it from the cascading keys, so
+ * without it deleting a fund would leave its payouts behind.
+ */
+function ensure_fund_payouts_table(): void
+{
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    try {
+        $pdo = Database::pdo();
+        $hasTable = (int)$pdo->query(
+            "SELECT COUNT(*) FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fund_payouts'"
+        )->fetchColumn();
+
+        if ($hasTable) return;
+
+        $pdo->exec("
+            CREATE TABLE fund_payouts (
+              id             CHAR(36)      NOT NULL PRIMARY KEY,
+              fund_id        CHAR(36)      NOT NULL,
+              fund_number    VARCHAR(64)   NULL,
+              customer_id    CHAR(36)      NULL,
+              customer_name  VARCHAR(191)  NULL,
+              -- Why the money went out, which is also what decides the amount:
+              --   maturity   — every week deposited, so the bonus is earned
+              --   settlement — the scheme ended early, deposits back only
+              --   partial    — some units closed, the rest still running
+              kind           ENUM('maturity','settlement','partial') NOT NULL DEFAULT 'settlement',
+              units_closed   DECIMAL(10,2) NOT NULL DEFAULT 0,
+              -- The customer's own deposits being returned.
+              deposit_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
+              -- The maturity bonus. Zero on anything but a matured fund: a
+              -- scheme closed early has not earned it.
+              bonus_amount   DECIMAL(14,2) NOT NULL DEFAULT 0,
+              payout_amount  DECIMAL(14,2) NOT NULL DEFAULT 0,
+              payout_date    DATE          NULL,
+              payment_method ENUM('cash','upi','card','bank','cheque') NOT NULL DEFAULT 'cash',
+              -- The account_ledger cash_out row this payout wrote.
+              ledger_id      CHAR(36)      NULL,
+              agent_id       CHAR(36)      NULL,
+              agent_name     VARCHAR(191)  NULL,
+              notes          TEXT          NULL,
+              created_at     DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              delflag        TINYINT(1)    NOT NULL DEFAULT 0,
+              deleted_at     DATETIME      NULL,
+              deleted_by     CHAR(36)      NULL,
+              INDEX idx_fund_payouts_fund (fund_id),
+              INDEX idx_fund_payouts_customer (customer_id),
+              INDEX idx_fund_payouts_ledger (ledger_id),
+              INDEX idx_fund_payouts_delflag (delflag),
+              CONSTRAINT fk_fund_payouts_fund FOREIGN KEY (fund_id)
+                REFERENCES funds(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        ");
+    } catch (\Throwable $e) {
+        // Schema check failures must never take the API down.
+    }
+}
+
+ensure_fund_payouts_table();
+
+/**
+ * A fund's status has to follow its deposits, not whoever wrote to it last.
+ *
+ * `matured` means the whole deposit target has been paid in — every week of a
+ * 50-week scheme. It was being decided in the browser and PATCHed alongside the
+ * running total, so a collection recorded anywhere else left the status behind,
+ * and a fund could sit at `active` with nothing left to collect.
+ *
+ * This repairs the funds already in that state. From here on FundService::recalc()
+ * derives it on the server after every collection, which is the only place it
+ * can be derived correctly.
+ */
+function repair_fund_status_from_deposits(): void
+{
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+
+    $marker = sys_get_temp_dir() . '/rrgroups_fund_status_' . md5(__DIR__) . '.done';
+    if (file_exists($marker)) return;
+
+    try {
+        $pdo = Database::pdo();
+
+        // A fund that has taken its full deposit is matured, unless it was
+        // closed early — closing is a decision, and re-opening it here would
+        // undo somebody's settlement.
+        $pdo->exec(
+            "UPDATE `funds`
+                SET `status` = 'matured'
+              WHERE `delflag` = 0
+                AND `status` = 'active'
+                AND COALESCE(`deposit_amount`, 0) > 0
+                AND COALESCE(`collected_amount`, 0) >= COALESCE(`deposit_amount`, 0) - 0.01"
+        );
+
+        // And one that has not is active again: `matured` used to be written
+        // the moment a settlement modal ran, before the deposits were in.
+        $pdo->exec(
+            "UPDATE `funds`
+                SET `status` = 'active'
+              WHERE `delflag` = 0
+                AND `status` = 'matured'
+                AND COALESCE(`deposit_amount`, 0) > 0
+                AND COALESCE(`collected_amount`, 0) < COALESCE(`deposit_amount`, 0) - 0.01"
+        );
+
+        @file_put_contents($marker, date('c'));
+    } catch (\Throwable $e) {
+        // Never take the API down over a repair pass.
+    }
+}
+
+repair_fund_status_from_deposits();
 
 /**
  * Which agent a chit group belongs to.
@@ -1550,6 +1755,59 @@ const SOFT_DELETE_UNIQUE_COLUMNS = [
 ];
 
 /**
+ * Tables that are money in the account book without holding it.
+ *
+ * Cash In Hand sums `collections` and `fund_payments` directly, so flagging
+ * one of those rows is the whole of the job. These three are different: a chit
+ * contribution, a chit prize and a fund payout each write an `account_ledger`
+ * row and keep only its id. The cash-book row is where the money is counted,
+ * and no foreign key points back to it.
+ *
+ * So deleting a chit group used to flag the group, its members, its draw
+ * sheet, its contributions and its auctions — and leave every rupee of it in
+ * the account book. The group vanished from the chit page and Cash In Hand did
+ * not move.
+ *
+ * Maps table => the column holding the `account_ledger` id.
+ */
+const LEDGER_LINKED_TABLES = [
+    'chit_payments' => 'ledger_id',
+    'chit_auctions' => 'ledger_id',
+    'fund_payouts'  => 'ledger_id',
+];
+
+/**
+ * Flag the cash-book rows that $rows are the record of.
+ *
+ * Called with rows that have just been (or are about to be) soft-deleted. The
+ * snapshot in the recycle bin holds these same rows, so a restore puts the
+ * money back with the record — see RecycleBinService::attachLedgerRows().
+ */
+function soft_delete_linked_ledger(string $table, array $rows, ?string $actorId): void
+{
+    $col = LEDGER_LINKED_TABLES[$table] ?? null;
+    if (!$col || !$rows) return;
+
+    $ids = [];
+    foreach ($rows as $row) {
+        $v = is_array($row) ? ($row[$col] ?? null) : null;
+        if (is_string($v) && $v !== '') $ids[$v] = $v;
+    }
+    if (!$ids) return;
+
+    try {
+        $pdo = Database::pdo();
+        $ph  = implode(',', array_fill(0, count($ids), '?'));
+        $pdo->prepare(
+            "UPDATE `account_ledger` SET `delflag` = 1, `deleted_at` = ?, `deleted_by` = ?
+              WHERE `id` IN ($ph) AND `delflag` = 0"
+        )->execute(array_merge([date('Y-m-d H:i:s'), $actorId], array_values($ids)));
+    } catch (\Throwable $e) {
+        // Never let it block the delete the user asked for.
+    }
+}
+
+/**
  * Flag the rows the database would have removed by ON DELETE CASCADE.
  *
  * A hard DELETE on a chit group took its members, draws and payments with
@@ -1561,6 +1819,11 @@ const SOFT_DELETE_UNIQUE_COLUMNS = [
 function soft_delete_cascade(string $table, array $rows, ?string $actorId, int $depth = 0): void
 {
     if ($depth >= 3 || !$rows) return;
+
+    // The money these rows stand for lives in `account_ledger`. Done here, at
+    // the top, so it covers the rows handed in as well as every row the walk
+    // below reaches on its way down.
+    soft_delete_linked_ledger($table, $rows, $actorId);
 
     try {
         $pdo = Database::pdo();
@@ -1588,7 +1851,12 @@ function soft_delete_cascade(string $table, array $rows, ?string $actorId, int $
                 $childCol   = $c['COLUMN_NAME'];
                 if ($childTable === 'recycle_bin' || !table_has_delflag($childTable)) continue;
 
-                $sel = $pdo->prepare("SELECT id FROM `$childTable` WHERE `$childCol` = ? AND delflag = 0");
+                // `id` alone was enough while the walk only had to flag rows.
+                // The ledger link has to travel with them now, or the recursive
+                // call cannot find the cash-book row a child was counted from.
+                $ledgerCol = LEDGER_LINKED_TABLES[$childTable] ?? null;
+                $select    = $ledgerCol ? "id, `$ledgerCol`" : 'id';
+                $sel = $pdo->prepare("SELECT $select FROM `$childTable` WHERE `$childCol` = ? AND delflag = 0");
                 $sel->execute([$id]);
                 $kids = $sel->fetchAll(PDO::FETCH_ASSOC);
                 if (!$kids) continue;
@@ -1659,7 +1927,9 @@ function ensure_utf8mb4_charset(): void
 
     $report = ['status' => 'skipped', 'converted' => [], 'fks_restored' => 0, 'errors' => []];
 
-    $marker = sys_get_temp_dir() . '/rrgroups_utf8mb4_' . md5(__DIR__) . '.ok';
+    // The suffix moved from _utf8mb4_ when the check grew to cover collations:
+    // a server that recorded the narrower check as passing has to look again.
+    $marker = sys_get_temp_dir() . '/rrgroups_utf8mb4_coll_' . md5(__DIR__) . '.ok';
     if (is_file($marker)) {
         $report['status'] = 'already-done';
         $GLOBALS['utf8mb4_migration'] = $report;
@@ -1675,12 +1945,20 @@ function ensure_utf8mb4_charset(): void
     }
 
     // Any text column that is not utf8mb4 will mangle Tamil and the rupee sign.
+    //
+    // The collation matters as much as the charset, and used not to be checked.
+    // A `utf8mb4_general_ci` column has the right charset, so it was skipped —
+    // and the migration reported success over a database that was still mixed.
+    // Mixed is not a cosmetic state: MariaDB refuses to compare two collations
+    // outright, and a chit payout died on exactly that. Every text column is
+    // brought to utf8mb4_unicode_ci, which is what the schema declares.
     try {
         $bad = $pdo->query(
             "SELECT DISTINCT TABLE_NAME FROM information_schema.COLUMNS
              WHERE TABLE_SCHEMA = DATABASE()
                AND CHARACTER_SET_NAME IS NOT NULL
-               AND CHARACTER_SET_NAME <> 'utf8mb4'"
+               AND (CHARACTER_SET_NAME <> 'utf8mb4'
+                    OR COLLATION_NAME <> 'utf8mb4_unicode_ci')"
         )->fetchAll(PDO::FETCH_COLUMN);
     } catch (\Throwable $e) {
         $report['status'] = 'inspect-failed';
@@ -1949,3 +2227,38 @@ function backfill_orphaned_soft_deletes(): void
 backfill_orphaned_soft_deletes();
 
 ensure_utf8mb4_charset();
+
+/**
+ * Gate a maintenance script so it is not simply a public URL.
+ *
+ * The repair and diagnostic scripts were written to be run from a browser on
+ * production, and every one of them shipped with no authentication at all.
+ * On a live site that meant anybody who guessed a filename could read
+ * customer names, loan numbers, fund numbers and amounts out of a dry run —
+ * and `?confirm=` would let them APPLY it. `reset_data.php` deletes the
+ * business's records. None of that needed a password.
+ *
+ * On the CLI there is nothing to check: being able to run `php` on the server
+ * already means more access than this grants. Over HTTP it takes an admin
+ * token, which `bearer_token()` reads from the Authorization header or, so
+ * that these stay usable from a browser address bar, from `?token=`.
+ */
+function require_maintenance_admin(): void
+{
+    if (PHP_SAPI === 'cli') return;
+
+    $token = bearer_token();
+    $claims = $token ? Jwt::decode($token) : null;
+    $role = strtolower(trim((string)($claims['role'] ?? '')));
+
+    if ($role !== 'admin') {
+        http_response_code(403);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo "Forbidden.\n\n";
+        echo "This is a maintenance script. Run it from the command line, or\n";
+        echo "append ?token=<your admin token> to the URL.\n\n";
+        echo "Better still: delete it. It was written for one deploy, and a\n";
+        echo "file that can rewrite the books should not outlive the job.\n";
+        exit;
+    }
+}

@@ -39,89 +39,101 @@ class _AgentCollectionDetailScreenState
   double get _totalDue =>
       _items.fold(0.0, (sum, i) => sum + i.dueAmount + i.penaltyAmount);
 
-  void _showCollectSheet(AgentCollectionItem item) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.4),
-      builder: (context) => CollectPaymentSheet(
-        customerName: widget.group.customerName,
-        subtitleLabel: 'Loan',
-        subtitleValue: item.loanNumber,
-        prefillAmount: item.dueAmount + item.penaltyAmount,
-        installmentAmount: item.installmentAmount,
-        dueAmount: item.dueAmount,
-        penaltyAmount: item.penaltyAmount,
-        outstandingBalance: item.outstandingBalance,
-        dueCount: 1,
-        onSubmit: (amount, method, date, notes) =>
-            _collectItem(item, amount, method, date, notes),
-      ),
+void _showCollectSheet(AgentCollectionItem item) {
+  final loanItems = _items
+      .where((candidate) =>
+          candidate.loanId == item.loanId &&
+          candidate.loanNumber == item.loanNumber &&
+          candidate.customerName == item.customerName)
+      .toList();
+  final loanGroup = AgentCustomerGroup(
+    customerId: item.customerId ?? widget.group.customerId,
+    customerName: item.customerName,
+    loanId: item.loanId,
+    loanType: item.loanType,
+    loanName: item.loanName,
+    items: loanItems.isEmpty ? [item] : loanItems,
+    contactPhone: item.contactPhone ?? widget.group.contactPhone,
+    address: item.address ?? widget.group.address,
+    latitude: item.latitude ?? widget.group.latitude,
+    longitude: item.longitude ?? widget.group.longitude,
+  );
+    final overdueItems = loanGroup.payableDueItems;
+    final hasOverdueDues = overdueItems.isNotEmpty;
+    final payableItems = hasOverdueDues ? overdueItems : loanGroup.items;
+  final payableGroup = AgentCustomerGroup(
+    customerId: loanGroup.customerId,
+    customerName: loanGroup.customerName,
+    loanId: loanGroup.loanId,
+    loanType: loanGroup.loanType,
+    loanName: loanGroup.loanName,
+    items: payableItems,
+    contactPhone: loanGroup.contactPhone,
+    address: loanGroup.address,
+    latitude: loanGroup.latitude,
+    longitude: loanGroup.longitude,
+  );
+
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    barrierColor: Colors.black.withValues(alpha: 0.4),
+    builder: (context) => CollectPaymentSheet(
+      customerName: loanGroup.customerName,
+      loanCollectionType: loanGroup.collectionType,
+      subtitleLabel: 'Loan',
+      subtitleValue: item.loanNumber,
+        prefillAmount: hasOverdueDues
+          ? payableGroup.overdueDueAmount
+          : payableGroup.totalDue,
+      installmentAmount: loanGroup.monthlyInterestDue > 0
+          ? loanGroup.monthlyInterestDue
+          : loanGroup.items.first.installmentAmount,
+        dueAmount: hasOverdueDues
+          ? payableGroup.overdueDueAmount
+          : payableGroup.totalDue,
+        penaltyAmount: payableGroup.totalPenalty,
+      outstandingBalance: loanGroup.totalOutstanding,
+        dueCount: hasOverdueDues
+          ? payableGroup.overdueDueCount
+          : payableGroup.items.length,
+      onSubmit: (amount, method, date, notes, paymentType, penalty) =>
+          _collectLoan(
+              loanGroup, amount, method, date, notes, paymentType, penalty),
+    ),
+  );
+}
+
+Future<void> _collectLoan(AgentCustomerGroup group, double amount,
+    String method, DateTime date, String? notes, String paymentType,
+    double penaltyAmount) async {
+  try {
+    await AgentCollectionApiService.collectForCustomer(
+      group: group,
+      amount: amount,
+      paymentMethod: method,
+      collectionDate: date,
+      notes: notes,
+      paymentType: paymentType,
+      penaltyAmount: penaltyAmount,
+    );
+    if (!mounted) return;
+    ToastService.show(
+      title: 'Collection recorded',
+      message: '${group.items.first.loanNumber} • ${AgentCollectionItem.formatAmount(amount)}',
+      type: ToastType.success,
+    );
+    await widget.onReload();
+    if (mounted) Navigator.of(context).pop();
+  } catch (e) {
+    ToastService.show(
+      title: 'Failed to record collection',
+      message: e.toString(),
+      type: ToastType.error,
     );
   }
-
-  Future<void> _collectItem(AgentCollectionItem item, double amount,
-      String method, DateTime date, String? notes) async {
-    try {
-      final payableAmount = item.dueAmount + item.penaltyAmount;
-      final fullyCovered = amount >= (payableAmount - 0.01);
-      await AgentCollectionApiService.collectPayment(
-        item: item,
-        amount: amount,
-        paymentMethod: method,
-        collectionDate: date,
-        notes: notes,
-        markPaid: fullyCovered,
-      );
-      if (!mounted) return;
-      ToastService.show(
-        title: 'Collection recorded',
-        message: '${item.loanNumber} • ${item.formattedDueAmount}',
-        type: ToastType.success,
-      );
-      setState(() {
-        if (fullyCovered) {
-          _items.removeWhere((i) => i.id == item.id);
-        } else {
-          final idx = _items.indexWhere((i) => i.id == item.id);
-          if (idx != -1) {
-            final remaining = payableAmount - amount;
-            _items[idx] = AgentCollectionItem(
-              id: item.id,
-              scheduleId: item.scheduleId,
-              loanId: item.loanId,
-              loanType: item.loanType,
-              loanName: item.loanName,
-              customerId: item.customerId,
-              customerName: item.customerName,
-              loanNumber: item.loanNumber,
-              dueAmount: remaining < 0 ? 0 : remaining,
-              installmentAmount: item.installmentAmount,
-              penaltyAmount: item.penaltyAmount,
-              dueDate: item.dueDate,
-              rawStatus: item.rawStatus,
-              contactPhone: item.contactPhone,
-              agentId: item.agentId,
-              agentName: item.agentName,
-              address: item.address,
-              latitude: item.latitude,
-              longitude: item.longitude,
-              outstandingBalance: item.outstandingBalance,
-            );
-          }
-        }
-      });
-      // Keep the assigned-collections list in sync in the background.
-      unawaited(widget.onReload());
-    } catch (e) {
-      ToastService.show(
-        title: 'Failed to record collection',
-        message: e.toString(),
-        type: ToastType.error,
-      );
-    }
-  }
+}
 
   @override
   Widget build(BuildContext context) {

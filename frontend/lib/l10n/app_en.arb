@@ -216,6 +216,7 @@
   "dashboardStatTodaysCollections": "Today's Collections",
   "dashboardStatOverdueAccounts": "Overdue Accounts",
   "dashboardStatPendingApprovals": "Pending Approvals",
+  "dashboardStatActiveCustomers": "Inactive Customers",
   "dashboardStatTotalLoanAmount": "Total Loan Amount",
   "dashboardStatInterestRevenue": "Interest Revenue",
   "dashboardStatMonthlyCollection": "Monthly Collection",
@@ -646,6 +647,11 @@
 
   "collectionsCustomerRequiredLabel": "CUSTOMER *",
   "collectionsSelectCustomerHint": "Select customer",
+  "collectionsCustomerSearchHint": "Search by name, mobile, customer ID or loan no",
+  "collectionsCustomerNoMatches": "No matching customers",
+  "collectionsCustomerLoanCount": "{count, plural, =0{No loans} =1{1 loan} other{{count} loans}}",
+  "collectionsChangeCustomer": "Change",
+  "@collectionsCustomerLoanCount": {"placeholders": {"count": {"type": "int"}}},
   "collectionsLoanNumberLabel": "LOAN NUMBER",
   "collectionsSelectCustomerFirstHint": "Select customer first",
   "collectionsSelectLoanHint": "Select loan",
@@ -709,10 +715,18 @@
   "collectionsPresetPayDue": "Pay Due Amount",
   "collectionsPresetPrincipalPartPayment": "Principal Part-Payment",
   "collectionsPresetFullBalance": "Full Balance",
+  "collectionsPresetPenalty": "Penalty",
   "collectionsPurposeMonthlyInterest": "Monthly Interest Payment",
 
   "collectionsPaymentSummaryLine": "Payment: {payment} • Remaining balance: {remaining}",
   "@collectionsPaymentSummaryLine": {
+    "placeholders": {
+      "payment": { "type": "String" },
+      "remaining": { "type": "String" }
+    }
+  },
+  "collectionsPenaltySummaryLine": "Penalty paid: {payment} • Penalty balance: {remaining}",
+  "@collectionsPenaltySummaryLine": {
     "placeholders": {
       "payment": { "type": "String" },
       "remaining": { "type": "String" }
@@ -1117,6 +1131,28 @@
   
   "fundsScreenTitle": "Funds",
   "fundsScreenSubtitle": "Weekly-deposit savings schemes with a maturity bonus",
+  "fundColFundNo": "Fund No.",
+  "fundColWeekly": "Weekly",
+  "fundColWeeks": "Weeks",
+  "fundColBonus": "Bonus",
+  "fundColDeposited": "Deposited",
+  "fundColPayout": "Payout",
+  "fundColMaturity": "Maturity",
+  "fundStatusActive": "Active",
+  "fundStatusMatured": "Matured",
+  "fundStatusClosed": "Closed",
+  "chitColGroupNo": "Group No.",
+  "chitColGroupName": "Group Name",
+  "chitColMonthly": "Monthly",
+  "chitColCollected": "Collected",
+  "chitColStartDate": "Start Date",
+  "chitColStatus": "Status",
+  "chitColActions": "Actions",
+  "chitColGroupValue": "Group Value",
+  "chitStatusActive": "Active",
+  "chitStatusCompleted": "Completed",
+  "chitStatusUpcoming": "Upcoming",
+  "chitActionEdit": "Edit",
 
   "fundCreateButton": "Create Fund",
   "fundSearchHint": "Search by customer name",
@@ -1136,6 +1172,20 @@
   "fundCardWeeks": "WEEKS",
   "fundCardBonus": "BONUS",
   "fundCardMaturityPayout": "Maturity payout",
+  "fundCardMaturityPayoutPending": "Maturity payout (on completion)",
+  "fundCardClosurePayout": "Closure payout (no bonus)",
+  "fundCardPaidOut": "Paid out · {date}",
+  "@fundCardPaidOut": {
+    "placeholders": {
+      "date": { "type": "String" }
+    }
+  },
+  "fundCardPayOutButton": "Pay Out · {amount}",
+  "@fundCardPayOutButton": {
+    "placeholders": {
+      "amount": { "type": "String" }
+    }
+  },
   "fundCardDepositedProgress": "Deposited {deposited} / {total}",
   "@fundCardDepositedProgress": {
     "placeholders": {
@@ -1145,7 +1195,7 @@
   },
   "fundCardPassbookButton": "Passbook",
   "fundCardCollectButton": "Collect",
-  "fundCardSettleBanner": "Settle in full · {amount} left",
+  "fundCardSettleBanner": "Close & settle · {amount} short",
   "@fundCardSettleBanner": {
     "placeholders": {
       "amount": { "type": "String" }
@@ -1305,6 +1355,24 @@
   "fundSettleSummaryProportionalBonus": "🎁 Proportional Bonus",
   "fundSettleSummaryNetClosurePayout": "Net Closure Payout Amount",
   "fundSettleSummaryPayoutToCustomer": "Payout to customer",
+  "fundSettleClosedPayoutSubtitleNoBonus": "Deposits back \u2014 no bonus",
+  "fundSettleSummaryDepositsReceived": "Deposits received",
+  "fundSettleSummaryBonusNotEarned": "not earned \u2014 {amount} short of the full term",
+  "@fundSettleSummaryBonusNotEarned": {
+    "placeholders": {
+      "amount": { "type": "String" }
+    }
+  },
+  "fundSettleClosureHelper": "Closing {units} of {maxUnits} units pays {amount} out now \u2014 Cash In Hand drops by that amount. The remaining {remaining} units keep collecting at {weekly} a week.",
+  "@fundSettleClosureHelper": {
+    "placeholders": {
+      "units": { "type": "String" },
+      "maxUnits": { "type": "String" },
+      "amount": { "type": "String" },
+      "remaining": { "type": "String" },
+      "weekly": { "type": "String" }
+    }
+  },
   "fundSettleFailedTitle": "Closure failed",
   "fundSettleCancelButton": "Cancel",
   "fundSettleConfirmPartialButton": "Confirm Partial Closure",
@@ -1335,8 +1403,23 @@
       "weeks": { "type": "String" }
     }
   },
-  "fundPassbookSummaryBonus": "🎁 Maturity bonus (at settlement)",
+  "fundPassbookSummaryBonus": "🎁 Maturity bonus",
   "fundPassbookSummaryPayout": "Maturity payout",
+  "fundPassbookSummaryPayableNow": "Payable now",
+  "fundPassbookSummaryPaidOut": "Paid out · {date}",
+  "@fundPassbookSummaryPaidOut": {
+    "placeholders": {
+      "date": { "type": "String" }
+    }
+  },
+  "fundPassbookBonusNotEarned": "not earned — closed early",
+  "fundPassbookPaidOutVia": "{method} · {date}",
+  "@fundPassbookPaidOutVia": {
+    "placeholders": {
+      "method": { "type": "String" },
+      "date": { "type": "String" }
+    }
+  },
   "fundPassbookNextDuePrefix": "Next deposit due · ",
   "fundPassbookNextDueValue": "{date} · Week {week} · {amount}",
   "@fundPassbookNextDueValue": {
@@ -3050,5 +3133,49 @@
   "addMemberFailedTitle": "Add member failed",
   "@addMemberFailedTitle": {
     "description": "Toast title when adding a member fails"
-  }
+  },
+  "custDashTitle": "My Dashboard",
+  "custDashGoodMorning": "Good morning",
+  "custDashGoodAfternoon": "Good afternoon",
+  "custDashGoodEvening": "Good evening",
+  "custDashGreeting": "{greeting}, {name}",
+  "@custDashGreeting": {"placeholders": {"greeting": {"type": "String"}, "name": {"type": "String"}}},
+  "custDashNextInstallment": "Your next installment of {amount} is due on {date}.",
+  "@custDashNextInstallment": {"placeholders": {"amount": {"type": "String"}, "date": {"type": "String"}}},
+  "custDashViewMyLoans": "View My Loans",
+  "custDashActiveLoans": "Active Loans",
+  "custDashOutstanding": "Outstanding",
+  "custDashPenalty": "Penalty",
+  "custDashTotalOutstanding": "Total Outstanding",
+  "custDashNextEmi": "Next EMI",
+  "custDashTotalPaid": "Total Paid",
+  "custDashPaid": "Paid",
+  "custDashBalance": "Balance",
+  "custDashPending": "Pending",
+  "custDashTotal": "Total",
+  "custDashRepaymentProgress": "Repayment Progress",
+  "custDashRepaymentProgressSub": "Paid vs balance to repay",
+  "custDashInstallmentStatus": "Installment Status",
+  "custDashInstallmentStatusSub": "Across your schedule",
+  "custDashMyLoans": "My Loans",
+  "custDashMyLoansSub": "All your loan accounts",
+  "custDashViewAll": "View all",
+  "custDashNoLoans": "You have no loans yet.",
+  "custDashEmiAmount": "EMI {amount}",
+  "@custDashEmiAmount": {"placeholders": {"amount": {"type": "String"}}},
+  "custDashUpcoming": "Upcoming Installments",
+  "custDashUpcomingSub": "Next payments due",
+  "custDashFullSchedule": "Full schedule",
+  "custDashNoUpcoming": "No upcoming installments.",
+  "custDashDueOn": "Due {date}",
+  "@custDashDueOn": {"placeholders": {"date": {"type": "String"}}},
+  "custDashRecentPayments": "Recent Payments",
+  "custDashRecentPaymentsSub": "Your payment history",
+  "custDashNoPayments": "No payments recorded yet.",
+  "custDashStatusActive": "Active",
+  "custDashStatusClosed": "Closed",
+  "custDashStatusOverdue": "Overdue",
+  "custDashStatusPending": "Pending",
+  "custDashStatusPartial": "Partial",
+  "custDashStatusPaid": "Paid"
 }

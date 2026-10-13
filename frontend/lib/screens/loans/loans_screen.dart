@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import '../../theme/app_theme.dart';
 import '../../widgets/app_shell.dart';
 import '../../widgets/page_header.dart';
@@ -251,6 +253,52 @@ String friendlyCollectionTypeLabel(LoanRecord loan, AppLocalizations l10n) =>
 
 String fmtRate(double v) =>
     v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(2);
+
+/// Loan status pill: solid light gold, with a small dot carrying the
+/// status colour (Active green, Overdue red, Closed grey, Pending amber).
+Widget loanStatusPill(String status, AppLocalizations l10n) {
+  final Color dot;
+  switch (status) {
+    case 'Active':
+      dot = AppColors.kSuccess;
+      break;
+    case 'Overdue':
+      dot = AppColors.kDanger;
+      break;
+    case 'Closed':
+      dot = AppColors.kTextMuted;
+      break;
+    default:
+      dot = AppColors.kWarning;
+  }
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+    decoration: BoxDecoration(
+      color: AppColors.gold100,
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: AppColors.gold300),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          localizedStatusLabel(status, l10n),
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: AppColors.gold800,
+          ),
+        ),
+      ],
+    ),
+  );
+}
 
 class RepaymentScheduleTable extends StatelessWidget {
   final List<RepaymentEntry> entries;
@@ -516,7 +564,8 @@ class _LoansScreenState extends State<LoansScreen> {
           loan: loan,
           onDelete: () {
             Navigator.of(context).pop();
-            _showLoanActionDialog(loan);
+            // "Close" here only dismisses the view sheet.
+            if (loan.status != 'Active') _showLoanActionDialog(loan);
           },
           actionLabel:
               loan.status == 'Active' ? l10n.loansActionClose : l10n.loansActionDelete,
@@ -672,17 +721,19 @@ class _LoansScreenState extends State<LoansScreen> {
     }
   }
 
-  BadgeTone _toneFor(String status) {
-    switch (status) {
-      case 'Active':
-        return BadgeTone.success;
-      case 'Overdue':
-        return BadgeTone.danger;
-      case 'Closed':
-        return BadgeTone.neutral;
-      default:
-        return BadgeTone.warning;
-    }
+  /// Numeric part of an HP No. (RR012 -> 12), so RR1000 ranks above RR999
+  /// instead of being compared as plain text.
+  static int _hpSequence(String hpNo) {
+    final match = RegExp(r'(\d+)\s*$').firstMatch(hpNo);
+    return match == null ? -1 : int.tryParse(match.group(1)!) ?? -1;
+  }
+
+  /// Highest HP No. first, so a newly created loan is always on top.
+  static int _compareByHpNoDesc(LoanRecord a, LoanRecord b) {
+    final bySequence =
+        _hpSequence(b.loanNumber).compareTo(_hpSequence(a.loanNumber));
+    if (bySequence != 0) return bySequence;
+    return b.loanNumber.compareTo(a.loanNumber);
   }
 
   List<LoanRecord> get _filteredLoans => _loans.where((l) {
@@ -692,7 +743,8 @@ class _LoansScreenState extends State<LoansScreen> {
         final matchesFilter =
             _selectedFilter == 'All' || l.status == _selectedFilter;
         return matchesQuery && matchesFilter;
-      }).toList();
+      }).toList()
+        ..sort(_compareByHpNoDesc);
 
   @override
   Widget build(BuildContext context) {
@@ -779,7 +831,14 @@ class _LoansScreenState extends State<LoansScreen> {
             child: ChoiceChip(
               label: Text(localizedStatusLabel(filter, l10n)),
               selected: isSelected,
+              showCheckmark: false,
               selectedColor: scheme.primary,
+              backgroundColor: AppColors.kSurface,
+              shape: StadiumBorder(
+                side: BorderSide(
+                  color: isSelected ? scheme.primary : AppColors.kBorder,
+                ),
+              ),
               labelStyle: TextStyle(
                 color: isSelected ? Colors.white : scheme.onSurface,
                 fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
@@ -794,12 +853,19 @@ class _LoansScreenState extends State<LoansScreen> {
 
     if (isNarrow) {
       return Container(
-        margin: const EdgeInsets.symmetric(horizontal: 20),
-        padding: const EdgeInsets.all(16),
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: scheme.surface,
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: scheme.outline.withValues(alpha: 0.2)),
+          border: Border.all(color: AppColors.kBorder),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.ink900.withValues(alpha: 0.04),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -828,15 +894,293 @@ class _LoansScreenState extends State<LoansScreen> {
     final loans = _filteredLoans;
 
     if (loans.isEmpty) {
-      return Center(child: Text(l10n.loansNoLoansFound));
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: const BoxDecoration(
+                color: AppColors.gold50,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.receipt_long_outlined,
+                  size: 30, color: AppColors.kGold),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              l10n.loansNoLoansFound,
+              style: const TextStyle(
+                  color: AppColors.kTextMuted, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+      );
     }
 
+    // Phone: single card column. Tablet: two card columns. Wide: full table.
+    return LayoutBuilder(builder: (context, constraints) {
+      final width = constraints.maxWidth;
+      if (width < 600) return _buildLoanCardList(loans, l10n, columns: 1);
+      if (width < 1000) return _buildLoanCardList(loans, l10n, columns: 2);
+      return _buildLoanDataTable(loans, l10n);
+    });
+  }
+
+  Widget _buildLoanCardList(List<LoanRecord> loans, AppLocalizations l10n,
+      {required int columns}) {
+    final gutter = columns == 1 ? 16.0 : 24.0;
+    final rowCount = (loans.length / columns).ceil();
+
+    return ListView.separated(
+      padding: EdgeInsets.fromLTRB(gutter, 8, gutter, 16),
+      itemCount: rowCount,
+      separatorBuilder: (_, __) => const SizedBox(height: 14),
+      itemBuilder: (context, row) {
+        if (columns == 1) return _buildLoanCard(loans[row], l10n);
+        final start = row * columns;
+        return IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < columns; i++) ...[
+                if (i > 0) const SizedBox(width: 14),
+                Expanded(
+                  child: start + i < loans.length
+                      ? _buildLoanCard(loans[start + i], l10n)
+                      : const SizedBox.shrink(),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLoanCard(LoanRecord loan, AppLocalizations l10n) {
+
+    Widget metric(String label, String value) => Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 11, color: AppColors.kTextMuted)),
+              const SizedBox(height: 3),
+              Text(value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.kTextDark)),
+            ],
+          ),
+        );
+
+    Widget action(
+            IconData icon, String label, Color color, VoidCallback onTap) =>
+        Expanded(
+          child: TextButton.icon(
+            onPressed: onTap,
+            icon: Icon(icon, size: 18),
+            label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+            style: TextButton.styleFrom(
+              foregroundColor: color,
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              textStyle:
+                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              shape: const RoundedRectangleBorder(),
+            ),
+          ),
+        );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.kSurface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.kBorder),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.ink900.withValues(alpha: 0.05),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Navy header strip — HP No., customer, type and status.
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFFA9791F), Color(0xFFC48E28)],
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppColors.kGold.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                        color: AppColors.kGoldLight.withValues(alpha: 0.5)),
+                  ),
+                  child: Text(
+                    loan.loanNumber,
+                    style: const TextStyle(
+                      color: AppColors.gold200,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        loan.customerName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: AppColors.kTextOnDark,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        friendlyCollectionTypeLabel(loan, l10n),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            color: AppColors.kTextOnDarkMuted, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                loanStatusPill(loan.status, l10n),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(l10n.loansColOutstanding,
+                    style: const TextStyle(
+                        fontSize: 11, color: AppColors.kTextMuted)),
+                const SizedBox(height: 2),
+                Text(
+                  loan.formattedOutstanding,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.kGoldDark,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: AppColors.kBackground,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      metric(l10n.loansColAmount, loan.formattedAmount),
+                      metric(l10n.loansColEmi, loan.formattedEmi),
+                      metric(l10n.loansColStart, loan.startDate ?? '-'),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Icon(Icons.person_outline,
+                        size: 16, color: AppColors.kGold),
+                    const SizedBox(width: 6),
+                    Text('${l10n.loansColAgent}: ',
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.kTextMuted)),
+                    Expanded(
+                      child: Text(
+                        loan.agentName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.kTextDark,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Row(
+            children: [
+              action(Icons.visibility_outlined, l10n.loansActionView,
+                  AppColors.kGoldDark, () => _showViewLoanDialog(loan)),
+              if (!_isCustomer) ...[
+                action(Icons.edit_outlined, l10n.loansActionEdit,
+                    AppColors.ink700, () => _showEditLoanDialog(loan)),
+                action(
+                  loan.status == 'Active' ? Icons.close : Icons.delete_outline,
+                  loan.status == 'Active'
+                      ? l10n.loansActionClose
+                      : l10n.loansActionDelete,
+                  AppColors.kDanger,
+                  () => _showLoanActionDialog(loan),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  static const double _loanTableHeadingHeight = 50;
+
+  Widget _buildLoanDataTable(List<LoanRecord> loans, AppLocalizations l10n) {
     final table = DataTable(
+      // Transparent so the gold gradient strip painted behind it shows through.
+      headingRowColor: WidgetStateProperty.all(Colors.transparent),
+      headingRowHeight: _loanTableHeadingHeight,
+      dataRowMinHeight: 58,
+      dataRowMaxHeight: 62,
+      columnSpacing: 28,
+      dividerThickness: 0.6,
       headingTextStyle: const TextStyle(
-        color: AppColors.kTextMuted,
+        color: AppColors.kTextOnDark,
         fontWeight: FontWeight.bold,
         fontSize: 12,
+        letterSpacing: 0.3,
       ),
+      dataTextStyle: const TextStyle(color: AppColors.kTextDark, fontSize: 13),
       columns: [
         DataColumn(label: Text(l10n.loansColHpNo)),
         DataColumn(label: Text(l10n.loansColCustomer)),
@@ -849,68 +1193,28 @@ class _LoansScreenState extends State<LoansScreen> {
         DataColumn(label: Text(l10n.loansColStart)),
         DataColumn(label: Text(l10n.loansColActions)),
       ],
-      rows: loans.map((loan) {
-        return DataRow(cells: [
-          DataCell(Text(loan.loanNumber,
-              style: const TextStyle(fontWeight: FontWeight.w600))),
-          DataCell(Text(loan.customerName)),
-          DataCell(Text(friendlyCollectionTypeLabel(loan, l10n))),
-          DataCell(Text(loan.formattedAmount)),
-          DataCell(Text(loan.formattedEmi)),
-          DataCell(Text(loan.formattedOutstanding,
-              style: const TextStyle(fontWeight: FontWeight.w600))),
-          DataCell(Text(loan.agentName)),
-          DataCell(StatusBadge(
-              label: localizedStatusLabel(loan.status, l10n),
-              tone: _toneFor(loan.status))),
-          DataCell(Text(loan.startDate ?? '-')),
-          DataCell(Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                icon: const Icon(Icons.visibility_outlined, size: 20),
-                color: AppColors.kTextMuted,
-                onPressed: () => _showViewLoanDialog(loan),
-                tooltip: l10n.loansActionView,
-              ),
-              if (!_isCustomer) ...[
-                IconButton(
-                  icon: const Icon(Icons.edit_outlined, size: 20),
-                  color: AppColors.kTextMuted,
-                  onPressed: () => _showEditLoanDialog(loan),
-                  tooltip: l10n.loansActionEdit,
-                ),
-                IconButton(
-                  icon: Icon(
-                    loan.status == 'Active'
-                        ? Icons.close
-                        : Icons.delete_outline,
-                    size: 20,
-                  ),
-                  color: AppColors.kDanger,
-                  onPressed: () => _showLoanActionDialog(loan),
-                  tooltip: loan.status == 'Active'
-                      ? l10n.loansActionClose
-                      : l10n.loansActionDelete,
-                ),
-              ],
-            ],
-          )),
-        ]);
-      }).toList(),
+      rows: [
+        for (var i = 0; i < loans.length; i++)
+          _buildLoanDataRow(loans[i], i, l10n),
+      ],
     );
 
-    return Card(
-      margin: EdgeInsets.symmetric(
-          horizontal: isNarrow ? 12.0 : 24.0, vertical: 8.0),
-      color: AppColors.kSurface,
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        side: const BorderSide(color: AppColors.kBorder),
-        borderRadius: BorderRadius.circular(12),
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
+      decoration: BoxDecoration(
+        color: AppColors.kSurface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.kBorder),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.ink900.withValues(alpha: 0.05),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(16),
         child: Scrollbar(
           thumbVisibility: true,
           trackVisibility: true,
@@ -921,12 +1225,96 @@ class _LoansScreenState extends State<LoansScreen> {
             child: ConstrainedBox(
               constraints: const BoxConstraints(minWidth: 1080),
               child: SingleChildScrollView(
-                child: table,
+                child: Stack(
+                  children: [
+                    // DataTable can't take a gradient, so paint the header
+                    // strip (same gold as the loan cards) behind the table.
+                    const Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: _loanTableHeadingHeight,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                            colors: [Color(0xFFA9791F), Color(0xFFC48E28)],
+                          ),
+                        ),
+                      ),
+                    ),
+                    table,
+                  ],
+                ),
               ),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  DataRow _buildLoanDataRow(LoanRecord loan, int index, AppLocalizations l10n) {
+    return DataRow(
+      color: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.hovered)) return AppColors.gold50;
+        return index.isOdd ? AppColors.kBackground : AppColors.kSurface;
+      }),
+      cells: [
+        DataCell(Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: AppColors.gold50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: AppColors.gold200),
+          ),
+          child: Text(loan.loanNumber,
+              style: const TextStyle(
+                  fontWeight: FontWeight.w700, color: AppColors.kGoldDark)),
+        )),
+        DataCell(Text(loan.customerName,
+            style: const TextStyle(fontWeight: FontWeight.w600))),
+        DataCell(Text(friendlyCollectionTypeLabel(loan, l10n))),
+        DataCell(Text(loan.formattedAmount)),
+        DataCell(Text(loan.formattedEmi)),
+        DataCell(Text(loan.formattedOutstanding,
+            style: const TextStyle(
+                fontWeight: FontWeight.w700, color: AppColors.kGoldDark))),
+        DataCell(Text(loan.agentName)),
+        DataCell(loanStatusPill(loan.status, l10n)),
+        DataCell(Text(loan.startDate ?? '-')),
+        DataCell(Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.visibility_outlined, size: 20),
+              color: AppColors.kGoldDark,
+              onPressed: () => _showViewLoanDialog(loan),
+              tooltip: l10n.loansActionView,
+            ),
+            if (!_isCustomer) ...[
+              IconButton(
+                icon: const Icon(Icons.edit_outlined, size: 20),
+                color: AppColors.ink600,
+                onPressed: () => _showEditLoanDialog(loan),
+                tooltip: l10n.loansActionEdit,
+              ),
+              IconButton(
+                icon: Icon(
+                  loan.status == 'Active' ? Icons.close : Icons.delete_outline,
+                  size: 20,
+                ),
+                color: AppColors.kDanger,
+                onPressed: () => _showLoanActionDialog(loan),
+                tooltip: loan.status == 'Active'
+                    ? l10n.loansActionClose
+                    : l10n.loansActionDelete,
+              ),
+            ],
+          ],
+        )),
+      ],
     );
   }
 }
@@ -950,19 +1338,6 @@ class LoanDetailDialog extends StatefulWidget {
 class _LoanDetailDialogState extends State<LoanDetailDialog> {
   bool _showSchedule = false;
   List<RepaymentEntry> _schedule = [];
-
-  BadgeTone _toneFor(String status) {
-    switch (status) {
-      case 'Active':
-        return BadgeTone.success;
-      case 'Overdue':
-        return BadgeTone.danger;
-      case 'Closed':
-        return BadgeTone.neutral;
-      default:
-        return BadgeTone.warning;
-    }
-  }
 
   String _durationLabel(LoanRecord loan, AppLocalizations l10n) {
     switch (loan.collectionType) {
@@ -1123,9 +1498,7 @@ class _LoanDetailDialogState extends State<LoanDetailDialog> {
             spacing: 12,
             runSpacing: 12,
             children: [
-              StatusBadge(
-                  label: localizedStatusLabel(loan.status, l10n),
-                  tone: _toneFor(loan.status)),
+              loanStatusPill(loan.status, l10n),
               Wrap(
                 spacing: 12,
                 runSpacing: 12,
@@ -1350,8 +1723,24 @@ class _LoanFormDialogState extends State<LoanFormDialog> {
   Future<void> _fetchNextHpNumber() async {
     setState(() => _loadingHpNumber = true);
     try {
-      final dynamic result = await ApiClient.instance
-          .list('loans', query: {'action': 'next_hp_number'});
+      // The backend answers this action with a single object,
+      // `{"next_hp_number": "RR031"}`, which ApiClient.list() discards
+      // (it only returns lists), so it is fetched directly.
+      final token =
+          ApiClient.instance.authToken ?? SessionService.instance.token;
+      final res = await http.get(
+        Uri.parse('${ApiClient.baseUrl}/rest.php').replace(queryParameters: {
+          'table': 'loans',
+          'action': 'next_hp_number',
+        }),
+        headers: {
+          'Accept': 'application/json',
+          if (token != null && token.isNotEmpty)
+            'Authorization': 'Bearer $token',
+        },
+      );
+      if (res.statusCode < 200 || res.statusCode >= 300) return;
+      final dynamic result = jsonDecode(res.body);
       String? next;
       if (result is Map && result['next_hp_number'] != null) {
         next = result['next_hp_number'].toString();
@@ -1361,7 +1750,12 @@ class _LoanFormDialogState extends State<LoanFormDialog> {
           (result.first as Map)['next_hp_number'] != null) {
         next = (result.first as Map)['next_hp_number'].toString();
       }
-      if (mounted && next != null && next.isNotEmpty) {
+      // The field is editable, so never overwrite a number the admin has
+      // already started typing while the suggestion was on its way.
+      if (mounted &&
+          next != null &&
+          next.isNotEmpty &&
+          _loanNumberController.text.trim().isEmpty) {
         setState(() => _loanNumberController.text = next!);
       }
     } catch (_) {
@@ -1522,7 +1916,11 @@ class _LoanFormDialogState extends State<LoanFormDialog> {
     final weeklyPenalty = double.tryParse(_weeklyPenaltyController.text) ?? 0;
 
     return <String, dynamic>{
-      if (widget.isEdit) 'loan_number': _loanNumberController.text,
+      // Auto-filled with the next number but editable. On create an empty
+      // field is left out so the backend generates one; on edit it is always
+      // sent, and the backend rejects a blank or duplicate number.
+      if (widget.isEdit || _loanNumberController.text.trim().isNotEmpty)
+        'loan_number': _loanNumberController.text.trim(),
       'customer_id': _selectedCustomer?.id,
       if (_selectedCustomer?.name.isNotEmpty == true)
         'customer_name': _selectedCustomer!.name,
@@ -1652,12 +2050,9 @@ class _LoanFormDialogState extends State<LoanFormDialog> {
                     isNarrow,
                     _buildTextField(
                         l10n.loansHpNumberLabel,
-                        widget.isEdit
-                            ? ''
-                            : (_loadingHpNumber
-                                ? l10n.loansHpNumberLoading
-                                : l10n.loansHpNumberAuto),
-                        enabled: false,
+                        _loadingHpNumber
+                            ? l10n.loansHpNumberLoading
+                            : l10n.loansHpNumberAuto,
                         controller: _loanNumberController),
                     _buildCustomerField(l10n),
                   ),

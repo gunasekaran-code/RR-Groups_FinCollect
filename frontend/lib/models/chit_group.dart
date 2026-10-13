@@ -12,6 +12,8 @@ class ChitGroup {
     required this.monthlyContribution,
     required this.startDate,
     required this.collectedAmount,
+    this.drawFrequency = 'monthly_1',
+    this.drawDays,
   });
 
   final String id;
@@ -24,6 +26,8 @@ class ChitGroup {
   final double monthlyContribution;
   final DateTime startDate;
   final double collectedAmount;
+  final String drawFrequency;
+  final String? drawDays;
 
   double get pendingAmount => groupValue - collectedAmount;
   int get collectedPercent =>
@@ -43,6 +47,8 @@ class ChitGroup {
           double.tryParse('${json['monthly_contribution']}') ?? 0,
       startDate: DateTime.tryParse('${json['start_date']}') ?? DateTime.now(),
       collectedAmount: double.tryParse('${json['collected_amount']}') ?? 0,
+      drawFrequency: json['draw_frequency']?.toString() ?? 'monthly_1',
+      drawDays: json['draw_days']?.toString(),
     );
   }
 
@@ -57,6 +63,8 @@ class ChitGroup {
       'monthly_contribution': monthlyContribution,
       'start_date': startDate.toIso8601String().split('T').first,
       'collected_amount': collectedAmount,
+      'draw_frequency': drawFrequency,
+      if (drawDays != null) 'draw_days': drawDays,
     };
   }
 

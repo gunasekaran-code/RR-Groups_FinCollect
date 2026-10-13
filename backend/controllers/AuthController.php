@@ -44,8 +44,47 @@ class AuthController extends Controller
             if (!$fn) json_error('Full name cannot be empty', 400);
             $data['full_name'] = $fn;
         }
-        foreach (['mobile', 'avatar_url', 'address', 'aadhaar', 'pan', 'occupation'] as $f) {
+        foreach (['mobile', 'avatar_url'] as $f) {
             if (array_key_exists($f, $b)) $data[$f] = self::clean($b[$f]);
+        }
+
+        // Address, occupation, Aadhaar and PAN exist on BOTH `profiles` and
+        // `customers`, and for a customer only the second copy is real: it is
+        // what the admin fills in, what the customer directory and the loan
+        // application form draw, and what the office has actually verified.
+        // The profile columns were a second copy that nothing filled, so a
+        // customer opening My Profile saw four empty boxes beside an admin
+        // screen showing their address, Aadhaar and PAN in full.
+        //
+        // So for a linked customer the customer row is the source of truth and
+        // is written first; the profile columns are kept in step behind it so
+        // that anything still reading them is not left stale.
+        $linkedCustomerId = ($current['role'] ?? '') === 'customer'
+            ? (self::clean($current['customer_id'] ?? null))
+            : null;
+
+        // Aadhaar and PAN are the business's record of who it lent to, checked
+        // against documents held on file. A customer editing their own is not
+        // a correction, it is a different person — so this route does not
+        // accept them for a linked customer, and My Profile shows them
+        // read-only. An admin changes them on the customer record.
+        $selfEditable = $linkedCustomerId ? ['address', 'occupation'] : ['address', 'occupation', 'aadhaar', 'pan'];
+        foreach ($selfEditable as $f) {
+            if (array_key_exists($f, $b)) $data[$f] = self::clean($b[$f]);
+        }
+
+        if ($linkedCustomerId) {
+            $onCustomer = [];
+            foreach (['address', 'occupation'] as $f) {
+                if (array_key_exists($f, $b)) $onCustomer[$f] = self::clean($b[$f]);
+            }
+            if (array_key_exists('full_name', $b) && isset($data['full_name'])) {
+                $onCustomer['full_name'] = $data['full_name'];
+            }
+            if (array_key_exists('mobile', $b)) $onCustomer['mobile'] = $data['mobile'] ?? null;
+            if ($onCustomer) {
+                Customer::updateWhere($onCustomer, ' WHERE id = ?', [$linkedCustomerId]);
+            }
         }
 
         // Email or password changes require verifying the current password.
@@ -72,10 +111,23 @@ class AuthController extends Controller
             $data['password_hash'] = password_hash((string)$b['new_password'], PASSWORD_BCRYPT);
         }
 
-        if (!$data) json_error('Nothing to update', 400);
+        if (!$data) {
+            // A request carrying only Aadhaar or PAN from a linked customer
+            // arrives here with everything stripped out, and "Nothing to
+            // update" is a confusing thing to be told when you just typed
+            // something. Say what actually happened.
+            $refused = $linkedCustomerId
+                && (array_key_exists('aadhaar', $b) || array_key_exists('pan', $b));
+            json_error(
+                $refused
+                    ? 'Aadhaar and PAN are held on your file by RR Groups. Ask your agent or the office to change them.'
+                    : 'Nothing to update',
+                $refused ? 403 : 400
+            );
+        }
 
         $rows = Profile::updateWhere($data, ' WHERE id = ?', [$id]);
-        json_out(['profile' => $rows[0] ?? null]);
+        json_out(['profile' => self::withCustomerDetails($rows[0] ?? null)]);
     }
 
     private function login(): void
@@ -108,7 +160,10 @@ class AuthController extends Controller
         json_out([
             'token'   => $token,
             'user'    => ['id' => $user['id'], 'email' => $user['email']],
-            'profile' => $user,
+            // Overlaid here too, not only in `me`. Sign-in is what paints the
+            // sidebar first, and a customer whose avatar only arrives with the
+            // following `me` sees her initials flash up and then change.
+            'profile' => self::withCustomerDetails($user),
         ]);
     }
 
@@ -346,7 +401,94 @@ HTML;
         }
         json_out([
             'user'    => ['id' => $user['id'], 'email' => $user['email']],
-            'profile' => $user,
+            'profile' => self::withCustomerDetails($user),
         ]);
     }
-}
+
+    /**
+     * Fill a customer's profile with the details their customer record holds.
+     *
+     * `profiles` and `customers` both have address, occupation, aadhaar and
+     * pan. For somebody who is a customer, only the second is filled in — by
+     * the admin, from documents on file — and the first was a second copy
+     * that nothing ever wrote. My Profile read the empty one, so a customer
+     * saw four blank boxes beside an admin screen showing all four in full.
+     *
+     * The customer record wins where it has something. A value sitting on the
+     * profile is not thrown away: for an admin or an agent it is the only
+     * copy there is, and for a customer it is what fills the gap when the
+     * office has not recorded that field yet.
+     */
+    private static function withCustomerDetails(?array $profile): ?array
+    {
+        if (!$profile) return null;
+        if (($profile['role'] ?? '') !== 'customer') return $profile;
+        $customerId = $profile['customer_id'] ?? null;
+        if (!$customerId) return $profile;
+
+        // Everything below is an enhancement, and this method runs inside
+        // `me` — the first call every page load makes. A profile without the
+        // overlay is a profile with four empty fields; a profile that throws
+        // is an app that will not start. So the whole of it fails quietly and
+        // hands back what it was given.
+        try {
+            // Named columns, not `*`. This runs inside `me`, the first call
+            // every page load makes, and the four scanned KYC images come to
+            // about half a megabyte — which was being sent on every navigation
+            // for the benefit of no screen at all. Nothing read them.
+            $customer = Customer::select(
+                ' WHERE id = ?', [$customerId], '', ' LIMIT 1',
+                '`id`, `address`, `occupation`, `aadhaar`, `pan`, `photo_url`,'
+                . " (`aadhaar_front_url` IS NOT NULL AND `aadhaar_front_url` <> '') AS `has_aadhaar_front`,"
+                . " (`aadhaar_back_url`  IS NOT NULL AND `aadhaar_back_url`  <> '') AS `has_aadhaar_back`,"
+                . " (`pan_url`           IS NOT NULL AND `pan_url`           <> '') AS `has_pan_doc`,"
+                . " (`signature_url`     IS NOT NULL AND `signature_url`     <> '') AS `has_signature`"
+            )[0] ?? null;
+            if (!$customer) return $profile;
+
+            foreach (['address', 'occupation', 'aadhaar', 'pan'] as $f) {
+                $fromCustomer = $customer[$f] ?? null;
+                if ($fromCustomer !== null && $fromCustomer !== '') $profile[$f] = $fromCustomer;
+            }
+
+            // Which papers the office holds, as four bytes rather than four
+            // images. The pictures themselves come from `photo.php`, which
+            // already lets a customer fetch her own.
+            foreach (['has_aadhaar_front', 'has_aadhaar_back', 'has_pan_doc', 'has_signature'] as $f) {
+                $profile[$f] = !empty($customer[$f]);
+            }
+
+            /**
+             * Her photograph, as her avatar.
+             *
+             * The admin's customer list draws `customers.photo_url`; her own
+             * sidebar draws `profiles.avatar_url`. Nothing kept the second in
+             * step until photos started being mirrored on save, so everybody
+             * photographed before that has a picture at the office and
+             * initials at her own login — which is exactly what was reported.
+             *
+             * Two things happen here. The profile being returned gets the
+             * photo straight away, so her sidebar is right on this very page
+             * load; and the blank column is filled in, so every other screen
+             * that reads `profiles` catches up too and this stops being a
+             * question that can be asked again.
+             */
+            $photo = (string)($customer['photo_url'] ?? '');
+            if ($photo !== '' && (string)($profile['avatar_url'] ?? '') === '') {
+                $profile['avatar_url'] = $photo;
+                try {
+                    Database::pdo()
+                        ->prepare("UPDATE `profiles` SET `avatar_url` = ?
+                                    WHERE `id` = ? AND (`avatar_url` IS NULL OR `avatar_url` = '')")
+                        ->execute([$photo, $profile['id'] ?? '']);
+                } catch (\Throwable $e) {
+                    // Showing her the photo matters; writing it back is a
+                    // tidy-up, and a failed tidy-up must not fail the page.
+                    error_log('avatar backfill failed for ' . ($profile['id'] ?? '?') . ': ' . $e->getMessage());
+                }
+            }
+        } catch (\Throwable $e) {
+            error_log('withCustomerDetails failed for profile ' . ($profile['id'] ?? '?') . ': ' . $e->getMessage());
+        }
+        return $profile;
+    }}

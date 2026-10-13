@@ -28,4 +28,29 @@ class FundPaymentController extends ResourceController
 
         parent::handle();
     }
+
+    /**
+     * A fund's running total is the sum of its deposits, so writing one has to
+     * re-derive it.
+     *
+     * Nothing did. Deleting a deposit left `funds.collected_amount` at the old
+     * figure — the passbook lost the row and the fund still claimed the money,
+     * and a fund one deposit short of its target stayed `matured` with nothing
+     * to collect. The Account Book can now delete these rows directly, which
+     * made a stale total reachable from a second screen.
+     */
+    protected function afterWrite(string $method, array $rows): void
+    {
+        $ids = [];
+        foreach ($rows as $row) {
+            if (!empty($row['fund_id'])) $ids[$row['fund_id']] = $row['fund_id'];
+        }
+        foreach ($ids as $id) {
+            try {
+                FundService::recalc(Database::pdo(), (string)$id);
+            } catch (\Throwable $e) {
+                error_log('FundPaymentController::afterWrite recalc failed: ' . $e->getMessage());
+            }
+        }
+    }
 }

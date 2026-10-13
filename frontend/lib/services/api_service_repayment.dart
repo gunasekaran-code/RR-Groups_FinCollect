@@ -1,9 +1,10 @@
 import 'dart:convert';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import '../models/repayment_installment.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../config/api_config.dart';
 import 'method_override_http.dart';
+import 'session_service.dart';
 
 /// Talks to the `ScheduleController` endpoint backing `repayment_schedule`.
 ///
@@ -17,10 +18,10 @@ class ApiServiceRepayment {
   static final ApiServiceRepayment instance = ApiServiceRepayment._();
 
   static String get _baseUrl => '${ApiConfig.normalizedBaseUrl}/rest.php';
+  static const _secureStorage = FlutterSecureStorage();
 
   Future<Map<String, String>> _headers() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('auth_token'); // match your login save key
+    final token = await _secureStorage.read(key: 'auth_token');
     return {
       'Content-Type': 'application/json',
       if (token != null) 'Authorization': 'Bearer $token',
@@ -37,6 +38,7 @@ class ApiServiceRepayment {
   Future<List<RepaymentInstallment>> fetchSchedule(String loanId) async {
     final uri = _uri({'loan_id': loanId});
     final res = await http.get(uri, headers: await _headers());
+    await SessionService.instance.handleUnauthorized(res);
 
     if (res.statusCode != 200) {
       throw ApiException(
@@ -63,6 +65,7 @@ class ApiServiceRepayment {
       headers: await _headers(),
       body: jsonEncode(installment.toJson()),
     );
+    await SessionService.instance.handleUnauthorized(res);
 
     if (res.statusCode != 200 && res.statusCode != 201) {
       throw ApiException(

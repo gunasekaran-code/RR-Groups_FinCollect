@@ -1,5 +1,30 @@
 enum AgentCollectionStatus { overdue, dueToday, pending, paid }
 
+/// The four collection "shapes" your product supports. Everything about
+/// which buttons/boxes CollectPaymentSheet shows, and how the backend
+/// applies a payment, is driven off this enum instead of scattered string
+/// checks on `loanType`.
+enum LoanCollectionType { weekly, monthlyEmi, daily, monthlyInterest, other }
+
+/// Normalizes a raw `loan_type` / `collection_type` string (e.g. "Weekly",
+/// "Monthly EMI", "monthly_interest", "Daily Loan") into a
+/// [LoanCollectionType]. Centralizing this means the sheet, the list
+/// screen, and the API service all agree on what "this is a daily loan"
+/// means, instead of each doing their own `.toLowerCase().contains(...)`.
+LoanCollectionType parseLoanCollectionType(String raw) {
+  final v = raw.trim().toLowerCase().replaceAll(RegExp(r'[\s_-]+'), '');
+  // Check monthlyinterest before the generic "monthly" check below.
+  if (v.contains('monthlyinterest') || v.contains('interest')) {
+    return LoanCollectionType.monthlyInterest;
+  }
+  if (v.contains('daily')) return LoanCollectionType.daily;
+  if (v.contains('weekly')) return LoanCollectionType.weekly;
+  if (v.contains('monthly') || v.contains('emi')) {
+    return LoanCollectionType.monthlyEmi;
+  }
+  return LoanCollectionType.other;
+}
+
 class AgentCollectionItem {
   final String id;
   final String? scheduleId;
@@ -12,6 +37,11 @@ class AgentCollectionItem {
   final double dueAmount;
   final double installmentAmount;
   final double penaltyAmount;
+
+  /// Penalty still owed on the whole loan (`loans.penalty_amount`). Unlike
+  /// [penaltyAmount] it includes late instalments whose EMI is already paid,
+  /// so it is the figure to collect against.
+  final double? loanPenaltyAmount;
   final DateTime? dueDate;
   final String rawStatus;
   final String? contactPhone;
@@ -34,6 +64,7 @@ class AgentCollectionItem {
     required this.dueAmount,
     this.installmentAmount = 0,
     this.penaltyAmount = 0,
+    this.loanPenaltyAmount,
     this.dueDate,
     required this.rawStatus,
     this.contactPhone,
@@ -80,6 +111,7 @@ class AgentCollectionItem {
       dueAmount: dueAmount,
       installmentAmount: parseDouble(json['emi_amount']),
       penaltyAmount: parseDouble(json['penalty_amount']),
+      loanPenaltyAmount: parseDoubleOrNull(json['loan_penalty_amount']),
       dueDate: _parseDate(json['due_date']),
       rawStatus: (json['status'] ?? 'pending').toString().toLowerCase(),
       contactPhone: (json['contact_phone'] ?? json['phone'])?.toString(),
@@ -105,6 +137,26 @@ class AgentCollectionItem {
 
   String get initials => _initialsFor(customerName);
 
+  /// The normalized type this item belongs to. Everything else
+  /// (penalty applicability, which buttons to show) should read off this
+  /// rather than re-parsing `loanType` in multiple places.
+  LoanCollectionType get collectionType => parseLoanCollectionType(loanType);
+
+  /// Weekly, monthly-EMI and monthly-interest loans carry an overdue
+  /// penalty. Daily loans never do — even if a stray `penalty_amount`
+  /// value shows up from the backend, the UI should ignore it for them.
+  bool get appliesPenalty =>
+      collectionType == LoanCollectionType.weekly ||
+      collectionType == LoanCollectionType.monthlyEmi ||
+      collectionType == LoanCollectionType.monthlyInterest;
+
+  bool get isMonthlyInterest =>
+      collectionType == LoanCollectionType.monthlyInterest;
+
+  /// Penalty amount gated by loan type — use this instead of
+  /// [penaltyAmount] directly anywhere you're deciding what to *display*.
+  double get effectivePenalty => appliesPenalty ? penaltyAmount : 0;
+
   String get displayLoanType {
     final value = loanType.trim();
     if (value.isEmpty) return 'Loan';
@@ -125,13 +177,15 @@ class AgentCollectionItem {
 
   AgentCollectionStatus get status {
     if (isPaid) return AgentCollectionStatus.paid;
+    // The backend reconciles repayment_schedule.status to "overdue".
+    // Keep that database status authoritative so a row due today is not
+    // accidentally counted as overdue because of a timezone/date fallback.
     if (rawStatus == 'overdue') return AgentCollectionStatus.overdue;
     final due = dueDate;
     if (due != null) {
       final now = DateTime.now();
       final dueOnly = DateTime(due.year, due.month, due.day);
       final today = DateTime(now.year, now.month, now.day);
-      if (dueOnly.isBefore(today)) return AgentCollectionStatus.overdue;
       if (dueOnly.isAtSameMomentAs(today)) {
         return AgentCollectionStatus.dueToday;
       }
@@ -143,17 +197,27 @@ class AgentCollectionItem {
 
   String get formattedDueAmount => formatAmount(dueAmount);
 
-  String get formattedPenaltyAmount => formatAmount(penaltyAmount);
+  String get formattedPenaltyAmount => formatAmount(effectivePenalty);
 
-  String get formattedTotalDue => formatAmount(dueAmount + penaltyAmount);
+  String get formattedTotalDue => formatAmount(dueAmount + effectivePenalty);
 
   String get formattedDueDate => formatDate(dueDate);
 
   static String formatDate(DateTime? d) {
     if (d == null) return '-';
     const months = [
-      'Jan',      'Feb',      'Mar',      'Apr',      'May',      'Jun',
-      'Jul',      'Aug',      'Sep',      'Oct',      'Nov',      'Dec',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     return '${d.day.toString().padLeft(2, '0')} ${months[d.month - 1]} ${d.year}';
   }
@@ -231,6 +295,17 @@ class AgentCustomerGroup {
   List<String> get loanNumbers =>
       items.map((e) => e.loanNumber).toSet().toList();
 
+  /// A group is created per (customer, loan), so every item in it shares
+  /// the same loan type — safe to read off the first item.
+  LoanCollectionType get collectionType =>
+      items.isNotEmpty ? items.first.collectionType : LoanCollectionType.other;
+
+  bool get appliesPenalty =>
+      items.isNotEmpty ? items.first.appliesPenalty : false;
+
+  bool get isMonthlyInterest =>
+      collectionType == LoanCollectionType.monthlyInterest;
+
   String get displayLoanType {
     final value = loanType.trim();
     if (value.isEmpty) return 'Loan';
@@ -251,11 +326,27 @@ class AgentCustomerGroup {
 
   double get totalDue => items.fold(0.0, (sum, i) => sum + i.dueAmount);
 
-  double get totalPenalty =>
-      items.fold(0.0, (sum, i) => sum + i.penaltyAmount);
+  /// Penalty still owed across the group's loans, gated by loan type —
+  /// daily loans never contribute here. Read from the loan rather than
+  /// summed over the open instalments: a late instalment keeps its penalty
+  /// after its EMI is paid, and a paid instalment is not in [items].
+  double get totalPenalty {
+    final seenLoans = <String>{};
+    double sum = 0;
+    for (final i in items) {
+      if (!i.appliesPenalty) continue;
+      if (i.loanPenaltyAmount == null) {
+        sum += i.penaltyAmount;
+      } else if (seenLoans.add(i.loanId)) {
+        sum += i.loanPenaltyAmount!;
+      }
+    }
+    return sum;
+  }
 
   double get totalDueWithPenalty => totalDue + totalPenalty;
 
+  /// For monthly-interest loans this doubles as "remaining principal".
   double get totalOutstanding {
     final seenLoans = <String>{};
     double sum = 0;
@@ -268,6 +359,53 @@ class AgentCustomerGroup {
     }
     return any ? sum : totalDue;
   }
+
+  /// For monthly-interest loans this is the interest currently due
+  /// (reuses `installmentAmount`, which the API/service layer populates
+  /// from `emi_amount` — for an interest loan that field represents the
+  /// month's interest, not principal).
+  double get monthlyInterestDue =>
+      items.isNotEmpty ? items.first.installmentAmount : 0;
+
+  List<AgentCollectionItem> get overdueItems => items
+      .where((item) => item.status == AgentCollectionStatus.overdue)
+      .toList();
+
+  /// Open installments that should be included in today's Pay Dues action.
+  /// This includes both past-due rows and the installment due today.
+  List<AgentCollectionItem> get payableDueItems => items
+      .where((item) =>
+          item.status == AgentCollectionStatus.overdue ||
+          item.status == AgentCollectionStatus.dueToday)
+      .toList();
+
+  List<AgentCollectionItem> get overdueDueItems => items
+      .where((item) => item.status == AgentCollectionStatus.overdue)
+      .toList();
+
+  List<AgentCollectionItem> get dueTodayItems => items
+      .where((item) => item.status == AgentCollectionStatus.dueToday)
+      .toList();
+
+  int get overdueCount => overdueDueItems.length;
+
+  int get dueTodayCount => dueTodayItems.length;
+
+  int get overdueDueCount => payableDueItems.length;
+
+  double get overdueEmi {
+    for (final item in items) {
+      if (item.installmentAmount > 0) return item.installmentAmount;
+    }
+    return 0;
+  }
+
+  /// Uses each repayment schedule row's actual remaining balance. Do not
+  /// derive this from an EMI multiplied by row count because partial
+  /// payments can leave different balances on different schedule rows.
+  /// Excludes penalty — that is collected separately (see [totalPenalty]).
+  double get overdueDueAmount =>
+      payableDueItems.fold(0, (sum, item) => sum + item.dueAmount);
 
   DateTime? get nearestDueDate {
     final dates = items.map((e) => e.dueDate).whereType<DateTime>().toList();

@@ -132,4 +132,73 @@ class QueryParser
         }
         return '';
     }
-}
+
+    /**
+     * The column list to SELECT, from `?select=`.
+     *
+     * This was accepted and then thrown away: every query, whatever it asked
+     * for, ran `SELECT *`. Nothing was wrong on screen — the extra columns
+     * were simply ignored by the client — so it was invisible until somebody
+     * measured. `profiles` answers a request for five columns with 64 KB,
+     * because one row carries a 60 KB base64 avatar that the agent dropdowns
+     * do not draw. Ten screens asked for less and were sent everything.
+     *
+     * Rules, in the order they matter:
+     *
+     *   - Only real columns of this table get through. Names are matched
+     *     against the live column map and quoted, so nothing from the query
+     *     string reaches SQL as syntax.
+     *   - A select naming NO column this table has falls back to `*`. That is
+     *     what the caller got before this existed; a perf change should not
+     *     turn a client's typo into an empty row.
+     *   - Embeds (`*, loans(*)`) are dropped rather than honoured. rest.php
+     *     has never resolved them — the one caller that asked for one got a
+     *     row without it and did not use it — so silently ignoring the
+     *     parenthesised part keeps that exactly as it was, minus the pretence.
+     *
+     * @param array<string,string> $columns the table's real column map
+     */
+    public static function columnList(array $columns, array $hide = [], array $flags = []): string
+    {
+        $raw = trim((string)($_GET['select'] ?? ''));
+        if ($columns === []) return '*';
+
+        // Nothing asked for in particular: everything the table has, less
+        // the columns it has declared too heavy to list. Naming one of them
+        // explicitly still works — that is how the profile modal and the
+        // edit form fetch one customer's papers.
+        if ($raw === '' || $raw === '*') {
+            if (!$hide) return '*';
+            $keep = array_diff(array_keys($columns), $hide);
+            if (!$keep) return '*';
+            $sql = array_map(fn($c) => '`' . str_replace('`', '', $c) . '`', $keep);
+            // For each hidden column the model asks to have reported, one
+            // byte saying whether it holds anything. That is what lets an
+            // avatar tell "no photograph" from "not fetched yet", instead
+            // of asking for a picture that was never taken.
+            foreach ($flags as $col => $alias) {
+                if (!isset($columns[$col]) || !in_array($col, $hide, true)) continue;
+                $c = '`' . str_replace('`', '', $col) . '`';
+                $a = '`' . str_replace('`', '', (string)$alias) . '`';
+                $sql[] = "($c IS NOT NULL AND $c <> '') AS $a";
+            }
+            return implode(', ', $sql);
+        }
+
+        // Strip embedded resources: `loans(*)`, `customers(id,name)`.
+        $raw = preg_replace('/[A-Za-z_][A-Za-z0-9_]*\s*\([^()]*\)/', '', $raw) ?? '';
+
+        $picked = [];
+        foreach (explode(',', $raw) as $part) {
+            $name = trim($part);
+            if ($name === '') continue;
+            if ($name === '*') return '*';
+            // PostgREST allows `alias:column`; only the column is meaningful here.
+            if (str_contains($name, ':')) $name = trim(substr($name, strrpos($name, ':') + 1));
+            if (!isset($columns[$name])) continue;
+            $picked[$name] = '`' . str_replace('`', '', $name) . '`';
+        }
+        if ($picked === []) return '*';
+
+        return implode(', ', $picked);
+    }}

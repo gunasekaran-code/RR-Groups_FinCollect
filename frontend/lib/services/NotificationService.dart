@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config/api_config.dart';
 import '../models/AppNotification.dart';
+import '../models/user_role.dart';
 import 'method_override_http.dart';
 import 'session_service.dart';
 
@@ -152,6 +153,51 @@ class NotificationService {
           : 'Failed to send notifications';
       throw NotificationApiException(message, res.statusCode);
     }
+  }
+
+  /// user_ids of every admin account — the recipients of support tickets.
+  static Future<List<String>> fetchAdminUserIds() async {
+    final res = await _client.get(
+      Uri.parse('$_restEndpoint?table=profiles&role=eq.admin&select=id'),
+      headers: _headers,
+    );
+    final list = _decodeList(res);
+    return list
+        .map((e) => (e as Map<String, dynamic>)['id']?.toString() ?? '')
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+  }
+
+  /// Deliver a Contact Support form submission to every admin's feed.
+  /// The sender (customer or agent) is named in the body so the admin knows
+  /// who to reply to without opening another screen.
+  static Future<void> sendSupportRequest({
+    required String category,
+    required String subject,
+    required String message,
+  }) async {
+    final adminIds = await fetchAdminUserIds();
+    if (adminIds.isEmpty) {
+      throw NotificationApiException(
+          'No admin account is available to receive this message');
+    }
+
+    final user = SessionService.instance.currentUser;
+    final senderName = (user?.name ?? '').trim();
+    final senderRole = user?.role.label ?? 'User';
+    final sender = senderName.isEmpty ? senderRole : '$senderName ($senderRole)';
+
+    // title is VARCHAR(191) in the notifications table.
+    var title = 'Support: $subject';
+    if (title.length > 191) title = '${title.substring(0, 188)}...';
+
+    await send(
+      userIds: adminIds,
+      type: 'info',
+      title: title,
+      message: 'From: $sender\nCategory: $category\n\n$message',
+    );
   }
 
   /// Returns just the count of unread notifications for a user.

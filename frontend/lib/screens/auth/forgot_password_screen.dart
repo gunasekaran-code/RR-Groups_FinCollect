@@ -171,21 +171,33 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
                               // Top Lock Badge Icon
-                              Center(
-                                child: Container(
-                                  width: 84,
-                                  height: 84,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: AppColors.gold100.withValues(alpha: 0.6),
-                                  ),
-                                  child: const Icon(
-                                    Icons.lock_reset_rounded,
-                                    color: AppColors.gold600,
-                                    size: 38,
-                                  ),
-                                ),
-                              ),
+                              // Top Logo
+Center(
+  child: Container(
+    width: 88,
+    height: 88,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      color: Colors.white,
+      border: Border.all(color: AppColors.gold100, width: 1.5),
+    ),
+    child: Center(
+      child: ClipOval(
+        child: Image.asset(
+          'assets/images/logo_app_icon.png',
+          fit: BoxFit.cover,
+          width: 100,
+          height: 100,
+          errorBuilder: (context, error, stackTrace) => const Icon(
+            Icons.lock_reset_rounded,
+            color: AppColors.gold600,
+            size: 38,
+          ),
+        ),
+      ),
+    ),
+  ),
+),
                               const SizedBox(height: 20),
 
                               // Error Banner

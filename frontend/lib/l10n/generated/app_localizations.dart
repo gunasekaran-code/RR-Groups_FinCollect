@@ -1060,6 +1060,12 @@ abstract class AppLocalizations {
   /// **'Pending Approvals'**
   String get dashboardStatPendingApprovals;
 
+  /// No description provided for @dashboardStatActiveCustomers.
+  ///
+  /// In en, this message translates to:
+  /// **'Inactive Customers'**
+  String get dashboardStatActiveCustomers;
+
   /// No description provided for @dashboardStatTotalLoanAmount.
   ///
   /// In en, this message translates to:
@@ -2734,6 +2740,30 @@ abstract class AppLocalizations {
   /// **'Select customer'**
   String get collectionsSelectCustomerHint;
 
+  /// No description provided for @collectionsCustomerSearchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Search by name, mobile, customer ID or loan no'**
+  String get collectionsCustomerSearchHint;
+
+  /// No description provided for @collectionsCustomerNoMatches.
+  ///
+  /// In en, this message translates to:
+  /// **'No matching customers'**
+  String get collectionsCustomerNoMatches;
+
+  /// No description provided for @collectionsCustomerLoanCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =0{No loans} =1{1 loan} other{{count} loans}}'**
+  String collectionsCustomerLoanCount(int count);
+
+  /// No description provided for @collectionsChangeCustomer.
+  ///
+  /// In en, this message translates to:
+  /// **'Change'**
+  String get collectionsChangeCustomer;
+
   /// No description provided for @collectionsLoanNumberLabel.
   ///
   /// In en, this message translates to:
@@ -2938,6 +2968,12 @@ abstract class AppLocalizations {
   /// **'Full Balance'**
   String get collectionsPresetFullBalance;
 
+  /// No description provided for @collectionsPresetPenalty.
+  ///
+  /// In en, this message translates to:
+  /// **'Penalty'**
+  String get collectionsPresetPenalty;
+
   /// No description provided for @collectionsPurposeMonthlyInterest.
   ///
   /// In en, this message translates to:
@@ -2949,6 +2985,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Payment: {payment} • Remaining balance: {remaining}'**
   String collectionsPaymentSummaryLine(String payment, String remaining);
+
+  /// No description provided for @collectionsPenaltySummaryLine.
+  ///
+  /// In en, this message translates to:
+  /// **'Penalty paid: {payment} • Penalty balance: {remaining}'**
+  String collectionsPenaltySummaryLine(String payment, String remaining);
 
   /// No description provided for @handoverLoadFailedTitle.
   ///
@@ -4391,6 +4433,138 @@ abstract class AppLocalizations {
   /// **'Weekly-deposit savings schemes with a maturity bonus'**
   String get fundsScreenSubtitle;
 
+  /// No description provided for @fundColFundNo.
+  ///
+  /// In en, this message translates to:
+  /// **'Fund No.'**
+  String get fundColFundNo;
+
+  /// No description provided for @fundColWeekly.
+  ///
+  /// In en, this message translates to:
+  /// **'Weekly'**
+  String get fundColWeekly;
+
+  /// No description provided for @fundColWeeks.
+  ///
+  /// In en, this message translates to:
+  /// **'Weeks'**
+  String get fundColWeeks;
+
+  /// No description provided for @fundColBonus.
+  ///
+  /// In en, this message translates to:
+  /// **'Bonus'**
+  String get fundColBonus;
+
+  /// No description provided for @fundColDeposited.
+  ///
+  /// In en, this message translates to:
+  /// **'Deposited'**
+  String get fundColDeposited;
+
+  /// No description provided for @fundColPayout.
+  ///
+  /// In en, this message translates to:
+  /// **'Payout'**
+  String get fundColPayout;
+
+  /// No description provided for @fundColMaturity.
+  ///
+  /// In en, this message translates to:
+  /// **'Maturity'**
+  String get fundColMaturity;
+
+  /// No description provided for @fundStatusActive.
+  ///
+  /// In en, this message translates to:
+  /// **'Active'**
+  String get fundStatusActive;
+
+  /// No description provided for @fundStatusMatured.
+  ///
+  /// In en, this message translates to:
+  /// **'Matured'**
+  String get fundStatusMatured;
+
+  /// No description provided for @fundStatusClosed.
+  ///
+  /// In en, this message translates to:
+  /// **'Closed'**
+  String get fundStatusClosed;
+
+  /// No description provided for @chitColGroupNo.
+  ///
+  /// In en, this message translates to:
+  /// **'Group No.'**
+  String get chitColGroupNo;
+
+  /// No description provided for @chitColGroupName.
+  ///
+  /// In en, this message translates to:
+  /// **'Group Name'**
+  String get chitColGroupName;
+
+  /// No description provided for @chitColMonthly.
+  ///
+  /// In en, this message translates to:
+  /// **'Monthly'**
+  String get chitColMonthly;
+
+  /// No description provided for @chitColCollected.
+  ///
+  /// In en, this message translates to:
+  /// **'Collected'**
+  String get chitColCollected;
+
+  /// No description provided for @chitColStartDate.
+  ///
+  /// In en, this message translates to:
+  /// **'Start Date'**
+  String get chitColStartDate;
+
+  /// No description provided for @chitColStatus.
+  ///
+  /// In en, this message translates to:
+  /// **'Status'**
+  String get chitColStatus;
+
+  /// No description provided for @chitColActions.
+  ///
+  /// In en, this message translates to:
+  /// **'Actions'**
+  String get chitColActions;
+
+  /// No description provided for @chitColGroupValue.
+  ///
+  /// In en, this message translates to:
+  /// **'Group Value'**
+  String get chitColGroupValue;
+
+  /// No description provided for @chitStatusActive.
+  ///
+  /// In en, this message translates to:
+  /// **'Active'**
+  String get chitStatusActive;
+
+  /// No description provided for @chitStatusCompleted.
+  ///
+  /// In en, this message translates to:
+  /// **'Completed'**
+  String get chitStatusCompleted;
+
+  /// No description provided for @chitStatusUpcoming.
+  ///
+  /// In en, this message translates to:
+  /// **'Upcoming'**
+  String get chitStatusUpcoming;
+
+  /// No description provided for @chitActionEdit.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit'**
+  String get chitActionEdit;
+
   /// No description provided for @fundCreateButton.
   ///
   /// In en, this message translates to:
@@ -4481,6 +4655,30 @@ abstract class AppLocalizations {
   /// **'Maturity payout'**
   String get fundCardMaturityPayout;
 
+  /// No description provided for @fundCardMaturityPayoutPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Maturity payout (on completion)'**
+  String get fundCardMaturityPayoutPending;
+
+  /// No description provided for @fundCardClosurePayout.
+  ///
+  /// In en, this message translates to:
+  /// **'Closure payout (no bonus)'**
+  String get fundCardClosurePayout;
+
+  /// No description provided for @fundCardPaidOut.
+  ///
+  /// In en, this message translates to:
+  /// **'Paid out · {date}'**
+  String fundCardPaidOut(String date);
+
+  /// No description provided for @fundCardPayOutButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Pay Out · {amount}'**
+  String fundCardPayOutButton(String amount);
+
   /// No description provided for @fundCardDepositedProgress.
   ///
   /// In en, this message translates to:
@@ -4502,7 +4700,7 @@ abstract class AppLocalizations {
   /// No description provided for @fundCardSettleBanner.
   ///
   /// In en, this message translates to:
-  /// **'Settle in full · {amount} left'**
+  /// **'Close & settle · {amount} short'**
   String fundCardSettleBanner(String amount);
 
   /// No description provided for @fundDeleteDialogTitle.
@@ -4982,6 +5180,31 @@ abstract class AppLocalizations {
   /// **'Payout to customer'**
   String get fundSettleSummaryPayoutToCustomer;
 
+  /// No description provided for @fundSettleClosedPayoutSubtitleNoBonus.
+  ///
+  /// In en, this message translates to:
+  /// **'Deposits back — no bonus'**
+  String get fundSettleClosedPayoutSubtitleNoBonus;
+
+  /// No description provided for @fundSettleSummaryDepositsReceived.
+  ///
+  /// In en, this message translates to:
+  /// **'Deposits received'**
+  String get fundSettleSummaryDepositsReceived;
+
+  /// No description provided for @fundSettleSummaryBonusNotEarned.
+  ///
+  /// In en, this message translates to:
+  /// **'not earned — {amount} short of the full term'**
+  String fundSettleSummaryBonusNotEarned(String amount);
+
+  /// No description provided for @fundSettleClosureHelper.
+  ///
+  /// In en, this message translates to:
+  /// **'Closing {units} of {maxUnits} units pays {amount} out now — Cash In Hand drops by that amount. The remaining {remaining} units keep collecting at {weekly} a week.'**
+  String fundSettleClosureHelper(String units, String maxUnits, String amount,
+      String remaining, String weekly);
+
   /// No description provided for @fundSettleFailedTitle.
   ///
   /// In en, this message translates to:
@@ -5051,7 +5274,7 @@ abstract class AppLocalizations {
   /// No description provided for @fundPassbookSummaryBonus.
   ///
   /// In en, this message translates to:
-  /// **'🎁 Maturity bonus (at settlement)'**
+  /// **'🎁 Maturity bonus'**
   String get fundPassbookSummaryBonus;
 
   /// No description provided for @fundPassbookSummaryPayout.
@@ -5059,6 +5282,30 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Maturity payout'**
   String get fundPassbookSummaryPayout;
+
+  /// No description provided for @fundPassbookSummaryPayableNow.
+  ///
+  /// In en, this message translates to:
+  /// **'Payable now'**
+  String get fundPassbookSummaryPayableNow;
+
+  /// No description provided for @fundPassbookSummaryPaidOut.
+  ///
+  /// In en, this message translates to:
+  /// **'Paid out · {date}'**
+  String fundPassbookSummaryPaidOut(String date);
+
+  /// No description provided for @fundPassbookBonusNotEarned.
+  ///
+  /// In en, this message translates to:
+  /// **'not earned — closed early'**
+  String get fundPassbookBonusNotEarned;
+
+  /// No description provided for @fundPassbookPaidOutVia.
+  ///
+  /// In en, this message translates to:
+  /// **'{method} · {date}'**
+  String fundPassbookPaidOutVia(String method, String date);
 
   /// No description provided for @fundPassbookNextDuePrefix.
   ///
@@ -6937,6 +7184,246 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Add member failed'**
   String get addMemberFailedTitle;
+
+  /// No description provided for @custDashTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'My Dashboard'**
+  String get custDashTitle;
+
+  /// No description provided for @custDashGoodMorning.
+  ///
+  /// In en, this message translates to:
+  /// **'Good morning'**
+  String get custDashGoodMorning;
+
+  /// No description provided for @custDashGoodAfternoon.
+  ///
+  /// In en, this message translates to:
+  /// **'Good afternoon'**
+  String get custDashGoodAfternoon;
+
+  /// No description provided for @custDashGoodEvening.
+  ///
+  /// In en, this message translates to:
+  /// **'Good evening'**
+  String get custDashGoodEvening;
+
+  /// No description provided for @custDashGreeting.
+  ///
+  /// In en, this message translates to:
+  /// **'{greeting}, {name}'**
+  String custDashGreeting(String greeting, String name);
+
+  /// No description provided for @custDashNextInstallment.
+  ///
+  /// In en, this message translates to:
+  /// **'Your next installment of {amount} is due on {date}.'**
+  String custDashNextInstallment(String amount, String date);
+
+  /// No description provided for @custDashViewMyLoans.
+  ///
+  /// In en, this message translates to:
+  /// **'View My Loans'**
+  String get custDashViewMyLoans;
+
+  /// No description provided for @custDashActiveLoans.
+  ///
+  /// In en, this message translates to:
+  /// **'Active Loans'**
+  String get custDashActiveLoans;
+
+  /// No description provided for @custDashOutstanding.
+  ///
+  /// In en, this message translates to:
+  /// **'Outstanding'**
+  String get custDashOutstanding;
+
+  /// No description provided for @custDashPenalty.
+  ///
+  /// In en, this message translates to:
+  /// **'Penalty'**
+  String get custDashPenalty;
+
+  /// No description provided for @custDashTotalOutstanding.
+  ///
+  /// In en, this message translates to:
+  /// **'Total Outstanding'**
+  String get custDashTotalOutstanding;
+
+  /// No description provided for @custDashNextEmi.
+  ///
+  /// In en, this message translates to:
+  /// **'Next EMI'**
+  String get custDashNextEmi;
+
+  /// No description provided for @custDashTotalPaid.
+  ///
+  /// In en, this message translates to:
+  /// **'Total Paid'**
+  String get custDashTotalPaid;
+
+  /// No description provided for @custDashPaid.
+  ///
+  /// In en, this message translates to:
+  /// **'Paid'**
+  String get custDashPaid;
+
+  /// No description provided for @custDashBalance.
+  ///
+  /// In en, this message translates to:
+  /// **'Balance'**
+  String get custDashBalance;
+
+  /// No description provided for @custDashPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Pending'**
+  String get custDashPending;
+
+  /// No description provided for @custDashTotal.
+  ///
+  /// In en, this message translates to:
+  /// **'Total'**
+  String get custDashTotal;
+
+  /// No description provided for @custDashRepaymentProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Repayment Progress'**
+  String get custDashRepaymentProgress;
+
+  /// No description provided for @custDashRepaymentProgressSub.
+  ///
+  /// In en, this message translates to:
+  /// **'Paid vs balance to repay'**
+  String get custDashRepaymentProgressSub;
+
+  /// No description provided for @custDashInstallmentStatus.
+  ///
+  /// In en, this message translates to:
+  /// **'Installment Status'**
+  String get custDashInstallmentStatus;
+
+  /// No description provided for @custDashInstallmentStatusSub.
+  ///
+  /// In en, this message translates to:
+  /// **'Across your schedule'**
+  String get custDashInstallmentStatusSub;
+
+  /// No description provided for @custDashMyLoans.
+  ///
+  /// In en, this message translates to:
+  /// **'My Loans'**
+  String get custDashMyLoans;
+
+  /// No description provided for @custDashMyLoansSub.
+  ///
+  /// In en, this message translates to:
+  /// **'All your loan accounts'**
+  String get custDashMyLoansSub;
+
+  /// No description provided for @custDashViewAll.
+  ///
+  /// In en, this message translates to:
+  /// **'View all'**
+  String get custDashViewAll;
+
+  /// No description provided for @custDashNoLoans.
+  ///
+  /// In en, this message translates to:
+  /// **'You have no loans yet.'**
+  String get custDashNoLoans;
+
+  /// No description provided for @custDashEmiAmount.
+  ///
+  /// In en, this message translates to:
+  /// **'EMI {amount}'**
+  String custDashEmiAmount(String amount);
+
+  /// No description provided for @custDashUpcoming.
+  ///
+  /// In en, this message translates to:
+  /// **'Upcoming Installments'**
+  String get custDashUpcoming;
+
+  /// No description provided for @custDashUpcomingSub.
+  ///
+  /// In en, this message translates to:
+  /// **'Next payments due'**
+  String get custDashUpcomingSub;
+
+  /// No description provided for @custDashFullSchedule.
+  ///
+  /// In en, this message translates to:
+  /// **'Full schedule'**
+  String get custDashFullSchedule;
+
+  /// No description provided for @custDashNoUpcoming.
+  ///
+  /// In en, this message translates to:
+  /// **'No upcoming installments.'**
+  String get custDashNoUpcoming;
+
+  /// No description provided for @custDashDueOn.
+  ///
+  /// In en, this message translates to:
+  /// **'Due {date}'**
+  String custDashDueOn(String date);
+
+  /// No description provided for @custDashRecentPayments.
+  ///
+  /// In en, this message translates to:
+  /// **'Recent Payments'**
+  String get custDashRecentPayments;
+
+  /// No description provided for @custDashRecentPaymentsSub.
+  ///
+  /// In en, this message translates to:
+  /// **'Your payment history'**
+  String get custDashRecentPaymentsSub;
+
+  /// No description provided for @custDashNoPayments.
+  ///
+  /// In en, this message translates to:
+  /// **'No payments recorded yet.'**
+  String get custDashNoPayments;
+
+  /// No description provided for @custDashStatusActive.
+  ///
+  /// In en, this message translates to:
+  /// **'Active'**
+  String get custDashStatusActive;
+
+  /// No description provided for @custDashStatusClosed.
+  ///
+  /// In en, this message translates to:
+  /// **'Closed'**
+  String get custDashStatusClosed;
+
+  /// No description provided for @custDashStatusOverdue.
+  ///
+  /// In en, this message translates to:
+  /// **'Overdue'**
+  String get custDashStatusOverdue;
+
+  /// No description provided for @custDashStatusPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Pending'**
+  String get custDashStatusPending;
+
+  /// No description provided for @custDashStatusPartial.
+  ///
+  /// In en, this message translates to:
+  /// **'Partial'**
+  String get custDashStatusPartial;
+
+  /// No description provided for @custDashStatusPaid.
+  ///
+  /// In en, this message translates to:
+  /// **'Paid'**
+  String get custDashStatusPaid;
 }
 
 class _AppLocalizationsDelegate

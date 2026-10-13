@@ -183,6 +183,36 @@ class AccountLedgerService {
     }
   }
 
+  /// Soft-delete rows from the unified account-book stream. Each item names
+  /// its real source table because synced receipts are not ledger rows.
+  Future<void> deleteTransactions(
+      List<({String table, String id})> items) async {
+    if (items.isEmpty) return;
+    final uri = Uri.parse(_endpoint).replace(queryParameters: {
+      'action': 'bulk_delete',
+    });
+    final res = await _client.post(
+      uri,
+      headers: _headers,
+      body: jsonEncode({
+        'items': items
+            .map((item) => {'table': item.table, 'id': item.id})
+            .toList(),
+      }),
+    );
+    if (res.statusCode != 200) {
+      throw AccountLedgerException(
+          _errorMessage(res, 'Failed to delete account book entries'));
+    }
+    final decoded = jsonDecode(res.body);
+    if (decoded is Map && decoded['skipped'] is List &&
+        (decoded['skipped'] as List).isNotEmpty) {
+      throw AccountLedgerException(
+          (decoded['skipped'] as List).first['reason']?.toString() ??
+              'Some entries could not be deleted.');
+    }
+  }
+
   // ---------------------------------------------------------------------
   // Response helpers — tolerate either a raw payload or a
   // { "success": bool, "data": ... } wrapper.
