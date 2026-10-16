@@ -1288,6 +1288,18 @@ abstract class AppLocalizations {
   /// **'Pending'**
   String get loansStatusPending;
 
+  /// No description provided for @loansSchedulePaidOn.
+  ///
+  /// In en, this message translates to:
+  /// **'Paid on {date}'**
+  String loansSchedulePaidOn(String date);
+
+  /// No description provided for @loansSchedulePaidProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'{paid} of {total} paid'**
+  String loansSchedulePaidProgress(String paid, String total);
+
   /// No description provided for @loansScheduleStatusPaid.
   ///
   /// In en, this message translates to:
@@ -2283,6 +2295,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'DUE DATE'**
   String get repaymentColDueDate;
+
+  /// No description provided for @repaymentColPaidDate.
+  ///
+  /// In en, this message translates to:
+  /// **'PAID DATE'**
+  String get repaymentColPaidDate;
+
+  /// No description provided for @repaymentPaidOnTime.
+  ///
+  /// In en, this message translates to:
+  /// **'on time'**
+  String get repaymentPaidOnTime;
+
+  /// No description provided for @repaymentPaidDaysLate.
+  ///
+  /// In en, this message translates to:
+  /// **'{days, plural, one{1 day late} other{{days} days late}}'**
+  String repaymentPaidDaysLate(num days);
 
   /// No description provided for @repaymentColEmiAmount.
   ///

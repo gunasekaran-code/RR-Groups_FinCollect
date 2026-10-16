@@ -269,6 +269,17 @@
   "loansStatusOverdue": "Overdue",
   "loansStatusClosed": "Closed",
   "loansStatusPending": "Pending",
+  "loansSchedulePaidOn": "Paid on {date}",
+  "@loansSchedulePaidOn": {
+    "placeholders": { "date": { "type": "String" } }
+  },
+  "loansSchedulePaidProgress": "{paid} of {total} paid",
+  "@loansSchedulePaidProgress": {
+    "placeholders": {
+      "paid": { "type": "String" },
+      "total": { "type": "String" }
+    }
+  },
   "loansScheduleStatusPaid": "Paid",
   "loansScheduleStatusDueToday": "Due Today",
   "loansTypeMonthlyEmi": "Monthly EMI",
@@ -516,6 +527,14 @@
 
   "repaymentColInstNo": "INST. NO",
   "repaymentColDueDate": "DUE DATE",
+  "repaymentColPaidDate": "PAID DATE",
+  "repaymentPaidOnTime": "on time",
+  "repaymentPaidDaysLate": "{days, plural, one{1 day late} other{{days} days late}}",
+  "@repaymentPaidDaysLate": {
+    "placeholders": {
+      "days": { "type": "num" }
+    }
+  },
   "repaymentColEmiAmount": "EMI AMOUNT",
   "repaymentColPaid": "PAID",
   "repaymentColBalance": "BALANCE",

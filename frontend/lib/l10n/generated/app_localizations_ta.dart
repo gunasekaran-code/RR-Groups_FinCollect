@@ -652,6 +652,16 @@ class AppLocalizationsTa extends AppLocalizations {
   String get loansStatusPending => 'நிலுவை';
 
   @override
+  String loansSchedulePaidOn(String date) {
+    return '$date அன்று செலுத்தப்பட்டது';
+  }
+
+  @override
+  String loansSchedulePaidProgress(String paid, String total) {
+    return '$total இல் $paid செலுத்தப்பட்டது';
+  }
+
+  @override
   String get loansScheduleStatusPaid => 'செலுத்தப்பட்டது';
 
   @override
@@ -1224,6 +1234,17 @@ class AppLocalizationsTa extends AppLocalizations {
 
   @override
   String get repaymentColDueDate => 'கடைசி தேதி';
+
+  @override
+  String get repaymentColPaidDate => 'செலுத்திய தேதி';
+
+  @override
+  String get repaymentPaidOnTime => 'சரியான நேரத்தில்';
+
+  @override
+  String repaymentPaidDaysLate(num days) {
+    return '$days நாட்கள் தாமதம்';
+  }
 
   @override
   String get repaymentColEmiAmount => 'EMI தொகை';

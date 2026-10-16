@@ -6,6 +6,10 @@ import '../../theme/glass_toast.dart';
 import '../../models/agent_collection.dart';
 import '../../services/agent_collection_api_service.dart';
 import '../../services/collection_api_service.dart';
+import '../../services/api_client.dart';
+import '../../models/loan_record.dart';
+import '../../models/repayment_installment.dart';
+import '../collections/collections_screen.dart' show DueTodaySheet, DueTodayLine;
 import '../../services/session_service.dart';
 import '../../models/payment_history.dart';
 import '../../utils/location_launcher.dart';
@@ -27,6 +31,7 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
   String? _loadError;
   List<AgentCustomerGroup> _groups = [];
   List<PaymentHistoryItem> _todaysCollections = [];
+  DueTodaySheet _dueSheet = DueTodaySheet(const []);
   String _query = '';
 
   // Keyed by "customerId|loanId" so it survives the list reload after a
@@ -61,11 +66,14 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
               agentId: agentId,
               fromDate: DateTime(now.year, now.month, now.day),
             );
+      final dueSheetFuture = _loadDueSheet(now);
       final groups = await groupsFuture;
       final collectionRows = await collectionsFuture;
+      final dueSheet = await dueSheetFuture;
       if (!mounted) return;
       setState(() {
         _groups = groups;
+        _dueSheet = dueSheet;
         _todaysCollections = collectionRows
             .map(PaymentHistoryItem.fromJson)
             .where((item) {
@@ -92,34 +100,44 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
     }
   }
 
+  /// "To Collect Today" with the web dashboard's rule. The backend limits
+  /// an agent to their own loans, schedules and receipts.
+  Future<DueTodaySheet> _loadDueSheet(DateTime now) async {
+    final today = DueTodaySheet.dayKey(now);
+    final results = await Future.wait([
+      ApiClient.instance.list('loans', query: {'status': 'in.(active,overdue)'}),
+      ApiClient.instance.list('repayment_schedule',
+          query: {'status': 'neq.paid', 'due_date': 'lte.$today'}),
+      ApiClient.instance
+          .list('collections', query: {'collection_date': 'eq.$today'}),
+    ]);
+    final collectedToday = <String, double>{};
+    for (final row in results[2]) {
+      final loanId = row['loan_id']?.toString() ?? '';
+      if (loanId.isEmpty) continue;
+      collectedToday[loanId] = (collectedToday[loanId] ?? 0) +
+          (double.tryParse(row['collection_amount']?.toString() ?? '') ?? 0);
+    }
+    return DueTodaySheet.build(
+      loans: results[0].map(LoanRecord.fromJson).toList(),
+      schedules: results[1].map(RepaymentInstallment.fromJson),
+      collectedTodayByLoan: collectedToday,
+      now: now,
+    );
+  }
+
+  AgentCustomerGroup? _groupForLoan(String loanId) {
+    for (final g in _groups) {
+      if (g.loanId == loanId) return g;
+    }
+    return null;
+  }
+
   List<AgentCustomerGroup> get _filteredGroups =>
       _groups.where((g) => g.matchesQuery(_query)).toList();
 
   double get _totalDue =>
       _groups.fold(0.0, (sum, g) => sum + g.totalDueWithPenalty);
-
-  List<AgentCustomerGroup> get _toCollectTodayGroups => _groups
-      .map((group) {
-        final payableItems = group.payableDueItems;
-        if (payableItems.isEmpty) return null;
-        return AgentCustomerGroup(
-          customerId: group.customerId,
-          customerName: group.customerName,
-          loanId: group.loanId,
-          loanType: group.loanType,
-          loanName: group.loanName,
-          items: payableItems,
-          contactPhone: group.contactPhone,
-          address: group.address,
-          latitude: group.latitude,
-          longitude: group.longitude,
-        );
-      })
-      .whereType<AgentCustomerGroup>()
-      .toList();
-
-  double get _toCollectTodayTotal => _toCollectTodayGroups.fold(
-      0.0, (sum, group) => sum + group.totalDueWithPenalty);
 
   double get _todaysCollectionsTotal =>
       _todaysCollections.fold(0.0, (sum, item) => sum + item.amount);
@@ -429,23 +447,27 @@ class _AgentCollectionScreenState extends State<AgentCollectionScreen> {
   }
 
   Widget _buildToCollectToday() {
-    final groups = _toCollectTodayGroups;
+    final sheet = _dueSheet;
     return _SummarySection(
       title: 'To Collect Today',
-      total: AgentCollectionItem.formatAmount(_toCollectTodayTotal),
+      total: AgentCollectionItem.formatAmount(sheet.remaining),
       subtitle:
-          '${groups.length} customer${groups.length == 1 ? '' : 's'} • '
-          '${AgentCollectionItem.formatAmount(_toCollectTodayTotal)} in arrears',
-      child: groups.isEmpty
+          '${sheet.customers} customer${sheet.customers == 1 ? '' : 's'} • '
+          '${AgentCollectionItem.formatAmount(sheet.overdueTotal)} in arrears'
+          '${sheet.settled > 0 ? ' • ${sheet.settled} settled' : ''}',
+      child: sheet.lines.isEmpty
           ? const _SummaryEmptyState(label: 'No pending collections')
           : Column(
-              children: groups
-                  .take(6)
-                  .map((group) => _TodayDueRow(
-                        group: group,
-                        onCollect: () => _showCollectSheet(group),
-                      ))
-                  .toList(),
+              children: sheet.lines.map((line) {
+                final group = _groupForLoan(line.loanId);
+                return _TodayDueRow(
+                  line: line,
+                  group: group,
+                  onCollect: group == null || line.settled
+                      ? null
+                      : () => _showCollectSheet(group),
+                );
+              }).toList(),
             ),
     );
   }
@@ -575,17 +597,28 @@ class _SummaryEmptyState extends StatelessWidget {
 }
 
 class _TodayDueRow extends StatelessWidget {
-  final AgentCustomerGroup group;
-  final VoidCallback onCollect;
+  final DueTodayLine line;
+  final AgentCustomerGroup? group;
+  final VoidCallback? onCollect;
 
-  const _TodayDueRow({required this.group, required this.onCollect});
+  const _TodayDueRow({required this.line, this.group, this.onCollect});
+
+  static String _dueInitials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.isEmpty || parts.first.isEmpty) return '?';
+    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
+    return (parts.first.substring(0, 1) + parts.last.substring(0, 1))
+        .toUpperCase();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final status = [
-      if (group.overdueCount > 0) 'Overdue - ${group.overdueCount}',
-      if (group.dueTodayCount > 0) 'Today - ${group.dueTodayCount}',
-    ].join(' • ');
+    final status = line.settled
+        ? 'Paid today'
+        : [
+            if (line.overdueCount > 0) 'Overdue - ${line.overdueCount}',
+            if (line.dueTodayCount > 0) 'Today - ${line.dueTodayCount}',
+          ].join(' • ');
     return Container(
       margin: const EdgeInsets.only(top: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
@@ -598,7 +631,7 @@ class _TodayDueRow extends StatelessWidget {
           CircleAvatar(
             radius: 20,
             backgroundColor: _kGold,
-            child: Text(group.initials,
+            child: Text(group?.initials ?? _dueInitials(line.customerName),
                 style: const TextStyle(
                     color: Colors.white, fontWeight: FontWeight.bold)),
           ),
@@ -607,11 +640,14 @@ class _TodayDueRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(group.customerName,
+                Text(line.customerName,
                     style: const TextStyle(fontWeight: FontWeight.w700)),
                 const SizedBox(height: 3),
                 Text(
-                  '${group.loanNumbers.isNotEmpty ? group.loanNumbers.first : group.loanId} • ${group.displayLoanType}',
+                  [
+                    line.loanNumber,
+                    if (group != null) group!.displayLoanType,
+                  ].join(' • '),
                   style: const TextStyle(
                       fontSize: 12, color: AppColors.kTextMuted),
                 ),
@@ -619,9 +655,11 @@ class _TodayDueRow extends StatelessWidget {
                 Text(status,
                     style: TextStyle(
                         fontSize: 12,
-                        color: group.hasOverdue
-                            ? AppColors.kDanger
-                            : AppColors.kWarning)),
+                        color: line.settled
+                            ? AppColors.kSuccess
+                            : line.overdueCount > 0
+                                ? AppColors.kDanger
+                                : AppColors.kWarning)),
               ],
             ),
           ),
@@ -629,7 +667,7 @@ class _TodayDueRow extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(AgentCollectionItem.formatAmount(group.totalDueWithPenalty),
+              Text(AgentCollectionItem.formatAmount(line.remaining),
                   style: const TextStyle(fontWeight: FontWeight.w800)),
               const SizedBox(height: 7),
               ElevatedButton(

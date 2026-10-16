@@ -7,6 +7,7 @@ import '../../widgets/page_header.dart';
 import '../../theme/glass_toast.dart';
 import '../../services/collection_api_service.dart';
 import '../../services/loan_service.dart';
+import '../../services/api_client.dart';
 import '../../services/agent_collection_api_service.dart';
 import '../../models/customer.dart';
 import '../../models/loan_record.dart';
@@ -62,6 +63,134 @@ String localizedPaymentMethodLabel(String key, AppLocalizations l10n) {
   }
 }
 
+/// One loan on the "To Collect Today" list, worked out with the web
+/// dashboard's rule so both apps show the same customers and amounts.
+class DueTodayLine {
+  DueTodayLine({
+    required this.loanId,
+    required this.customerId,
+    required this.customerName,
+    required this.loanNumber,
+    required this.dueToday,
+    required this.dueTodayCount,
+    required this.overdue,
+    required this.overdueCount,
+    required this.penalty,
+    required this.collectedToday,
+    required this.oldestDue,
+  });
+
+  final String loanId;
+  final String? customerId;
+  final String customerName;
+  final String loanNumber;
+  final double dueToday; // instalment balance falling due today
+  final int dueTodayCount;
+  final double overdue; // unpaid balance of earlier instalments (arrears)
+  final int overdueCount;
+  final double penalty;
+  final double collectedToday;
+  final String? oldestDue; // yyyy-MM-dd of the oldest open instalment
+
+  double get remaining => _r2(dueToday + overdue + penalty);
+  bool get settled => remaining <= 0;
+}
+
+/// The whole "To Collect Today" sheet: every active or overdue loan with an
+/// instalment due today or earlier (or penalty), plus any loan fully paid
+/// today. Mirrors the web app's dueToday helper.
+class DueTodaySheet {
+  DueTodaySheet(this.lines);
+
+  final List<DueTodayLine> lines;
+
+  double get remaining => _r2(lines.fold(0, (s, l) => s + l.remaining));
+  double get overdueTotal => _r2(lines.fold(0, (s, l) => s + l.overdue));
+  int get settled => lines.where((l) => l.settled).length;
+
+  /// Distinct customers who still owe something today.
+  int get customers => lines
+      .where((l) => !l.settled)
+      .map((l) => l.customerId ?? 'loan:${l.loanId}')
+      .toSet()
+      .length;
+
+  static String dayKey(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  factory DueTodaySheet.build({
+    required List<LoanRecord> loans,
+    required Iterable<RepaymentInstallment> schedules,
+    required Map<String, double> collectedTodayByLoan,
+    DateTime? now,
+  }) {
+    final today = dayKey(now ?? DateTime.now());
+
+    // Open instalments per loan.
+    final openByLoan = <String, List<RepaymentInstallment>>{};
+    for (final row in schedules) {
+      if (row.loanId.isEmpty || row.status == 'paid' || row.balance <= 0) {
+        continue;
+      }
+      openByLoan.putIfAbsent(row.loanId, () => []).add(row);
+    }
+
+    final lines = <DueTodayLine>[];
+    for (final loan in loans) {
+      final status = loan.status.toLowerCase();
+      if (status != 'active' && status != 'overdue') continue;
+
+      var dueToday = 0.0, overdue = 0.0, rowPenalty = 0.0;
+      var dueTodayCount = 0, overdueCount = 0;
+      String? oldest;
+      for (final row in openByLoan[loan.id] ?? const <RepaymentInstallment>[]) {
+        final due = row.dueDate == null ? '' : dayKey(row.dueDate!);
+        if (due.isEmpty || due.compareTo(today) > 0) continue;
+        rowPenalty += row.penaltyAmount;
+        if (due == today) {
+          dueToday += row.balance;
+          dueTodayCount++;
+        } else {
+          overdue += row.balance;
+          overdueCount++;
+        }
+        if (oldest == null || due.compareTo(oldest) < 0) oldest = due;
+      }
+      final penalty =
+          loan.penaltyAmount != 0 ? loan.penaltyAmount : rowPenalty;
+      final collected = _r2(collectedTodayByLoan[loan.id] ?? 0);
+      final line = DueTodayLine(
+        loanId: loan.id,
+        customerId: loan.customerId,
+        customerName: loan.customerName,
+        loanNumber: loan.loanNumber,
+        dueToday: _r2(dueToday),
+        dueTodayCount: dueTodayCount,
+        overdue: _r2(overdue),
+        overdueCount: overdueCount,
+        penalty: _r2(penalty),
+        collectedToday: collected,
+        oldestDue: oldest,
+      );
+      if (line.remaining <= 0 && collected <= 0) continue;
+      lines.add(line);
+    }
+
+    // Still owing first, oldest arrears first, then biggest amount.
+    lines.sort((a, b) {
+      if (a.settled != b.settled) return a.settled ? 1 : -1;
+      final ao = a.oldestDue, bo = b.oldestDue;
+      if (ao != null && bo != null && ao != bo) return ao.compareTo(bo);
+      final byAmount = b.remaining.compareTo(a.remaining);
+      if (byAmount != 0) return byAmount;
+      return a.customerName.compareTo(b.customerName);
+    });
+    return DueTodaySheet(lines);
+  }
+}
+
+double _r2(double n) => (n * 100).roundToDouble() / 100;
+
 class CollectionsScreen extends StatefulWidget {
   const CollectionsScreen({super.key});
 
@@ -89,8 +218,13 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
   List<Customer> _customers = [];
   List<LoanRecord> _allLoans = [];
   List<String> _agentNames = [];
+  Map<String, String> _agentNameById = {};
   Map<String, List<RepaymentInstallment>> _schedulesByLoan = {};
   List<AgentCustomerGroup> _collectionGroups = [];
+  // Every unpaid instalment due today or earlier, for "To Collect Today".
+  // Fetched on its own: [_schedulesByLoan] comes from a query capped at 200
+  // rows, which a couple of 100-day loans use up, leaving the rest empty.
+  List<RepaymentInstallment> _openDueRows = [];
 
   @override
   void initState() {
@@ -240,6 +374,13 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
       );
       final collectionGroups =
           await AgentCollectionApiService.fetchAllCollectionGroups();
+      final openDueRows = await ApiClient.instance.list(
+        'repayment_schedule',
+        query: {
+          'status': 'neq.paid',
+          'due_date': 'lte.${DueTodaySheet.dayKey(DateTime.now())}',
+        },
+      );
       final schedules = <String, List<RepaymentInstallment>>{
         for (final entry in scheduleRows.entries) entry.key: entry.value,
       };
@@ -249,9 +390,11 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
         _customers = customers;
         _allLoans = loans;
         _agentNames = agents.map((agent) => agent.name).toList()..sort();
+        _agentNameById = {for (final a in agents) a.id: a.name};
         _schedulesByLoan = schedules;
         _collections = mapped;
         _collectionGroups = collectionGroups;
+        _openDueRows = openDueRows.map(RepaymentInstallment.fromJson).toList();
         _isLoading = false;
       });
     } catch (e) {
@@ -546,38 +689,40 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
     }
   }
 
-  List<AgentCustomerGroup> get _toCollectToday {
-    return _collectionGroups
-        .map((group) {
-          final payableItems = group.items
-              .where((item) =>
-                  item.status == AgentCollectionStatus.overdue ||
-                  item.status == AgentCollectionStatus.dueToday)
-              .toList();
-          if (payableItems.isEmpty) return null;
-
-          return AgentCustomerGroup(
-            customerId: group.customerId,
-            customerName: group.customerName,
-            loanId: group.loanId,
-            loanType: group.loanType,
-            loanName: group.loanName,
-            items: payableItems,
-            contactPhone: group.contactPhone,
-            address: group.address,
-            latitude: group.latitude,
-            longitude: group.longitude,
-          );
-        })
-        .whereType<AgentCustomerGroup>()
-        .toList();
+  bool _isToday(Map<String, String> row) {
+    final date = _parseDate(row['date'] ?? '');
+    final now = DateTime.now();
+    return date != null &&
+        date.year == now.year &&
+        date.month == now.month &&
+        date.day == now.day;
   }
 
-  double get _toCollectTodayTotal =>
-      _toCollectToday.fold(0, (sum, group) => sum + group.totalDueWithPenalty);
+  /// "To Collect Today", built from the loans, schedules and today's
+  /// receipts this screen already loaded — same rule as the web app.
+  DueTodaySheet get _dueSheet {
+    final collectedToday = <String, double>{};
+    for (final row in _collections.where(_isToday)) {
+      final loanId = row['loan_id'] ?? '';
+      if (loanId.isEmpty) continue;
+      collectedToday[loanId] = (collectedToday[loanId] ?? 0) +
+          _parseAmount(row['amount'] ?? '0');
+    }
+    return DueTodaySheet.build(
+      loans: _allLoans,
+      schedules: _openDueRows,
+      collectedTodayByLoan: collectedToday,
+    );
+  }
 
-  double get _arrearsTotal =>
-      _toCollectToday.fold(0, (sum, group) => sum + group.totalDueWithPenalty);
+  /// The collect sheet works on a loan's open instalments, so each line is
+  /// paired with that loan's group.
+  AgentCustomerGroup? _groupForLoan(String loanId) {
+    for (final g in _collectionGroups) {
+      if (g.loanId == loanId) return g;
+    }
+    return null;
+  }
 
   void _showCollectPaymentSheet(AgentCustomerGroup group) {
     final overdueItems = group.payableDueItems;
@@ -654,7 +799,8 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
   }
 
   Widget _buildToCollectToday(bool isNarrow) {
-    final groups = _toCollectToday;
+    final sheet = _dueSheet;
+    final lines = sheet.lines;
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: isNarrow ? 20 : 24),
       child: Container(
@@ -675,18 +821,19 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
                       style:
                           TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
                 ),
-                Text(AgentCollectionItem.formatAmount(_toCollectTodayTotal),
+                Text(AgentCollectionItem.formatAmount(sheet.remaining),
                     style: const TextStyle(
                         fontSize: 18, fontWeight: FontWeight.w800)),
               ],
             ),
             const SizedBox(height: 4),
             Text(
-              '${groups.length} customer${groups.length == 1 ? '' : 's'} • '
-              '${AgentCollectionItem.formatAmount(_arrearsTotal)} in arrears',
+              '${sheet.customers} customer${sheet.customers == 1 ? '' : 's'} • '
+              '${AgentCollectionItem.formatAmount(sheet.overdueTotal)} in arrears'
+              '${sheet.settled > 0 ? ' • ${sheet.settled} settled' : ''}',
               style: const TextStyle(color: AppColors.kTextMuted),
             ),
-            if (groups.isEmpty)
+            if (lines.isEmpty)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
                 child: Center(
@@ -696,7 +843,7 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
               )
             else ...[
               const SizedBox(height: 12),
-              ...groups.take(6).map(_buildToCollectRow),
+              ...lines.map(_buildToCollectRow),
             ],
           ],
         ),
@@ -704,18 +851,27 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
     );
   }
 
-  Widget _buildToCollectRow(AgentCustomerGroup group) {
+  Widget _buildToCollectRow(DueTodayLine line) {
+    final group = _groupForLoan(line.loanId);
     final statusParts = <String>[];
-    if (group.overdueCount > 0) {
-      statusParts.add('Overdue - ${group.overdueCount}');
-    }
-    if (group.dueTodayCount > 0) {
-      statusParts.add('Today - ${group.dueTodayCount}');
+    if (line.settled) {
+      statusParts.add('Paid today');
+    } else {
+      if (line.overdueCount > 0) {
+        statusParts.add('Overdue - ${line.overdueCount}');
+      }
+      if (line.dueTodayCount > 0) {
+        statusParts.add('Today - ${line.dueTodayCount}');
+      }
     }
     final status = statusParts.join(' • ');
-    final statusColor =
-        group.hasOverdue ? AppColors.kDanger : AppColors.kWarning;
-    final scheduleDates = group.payableDueItems
+    final hasOverdue = line.overdueCount > 0;
+    final statusColor = line.settled
+        ? AppColors.kSuccess
+        : hasOverdue
+            ? AppColors.kDanger
+            : AppColors.kWarning;
+    final scheduleDates = (group?.payableDueItems ?? const [])
         .map((item) => item.dueDate)
         .whereType<DateTime>()
         .map(AgentCollectionItem.formatDate)
@@ -726,7 +882,7 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       decoration: BoxDecoration(
         border: Border.all(
-          color: group.hasOverdue
+          color: hasOverdue
               ? AppColors.kDanger.withValues(alpha: 0.25)
               : AppColors.kBorder,
         ),
@@ -737,7 +893,7 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
           CircleAvatar(
             radius: 20,
             backgroundColor: const Color(0xFFB38222),
-            child: Text(group.initials,
+            child: Text(_initials(line.customerName),
                 style: const TextStyle(
                     color: Colors.white, fontWeight: FontWeight.bold)),
           ),
@@ -746,12 +902,14 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(group.customerName,
+                Text(line.customerName,
                     style: const TextStyle(fontWeight: FontWeight.w700)),
                 const SizedBox(height: 3),
                 Text(
-                  '${group.loanNumbers.isNotEmpty ? group.loanNumbers.first : group.loanId} • '
-                  '${group.displayLoanType}',
+                  [
+                    line.loanNumber,
+                    if (group != null) group.displayLoanType,
+                  ].join(' • '),
                   style: const TextStyle(
                       fontSize: 12, color: AppColors.kTextMuted),
                 ),
@@ -778,12 +936,14 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text(
-                AgentCollectionItem.formatAmount(group.totalDueWithPenalty),
+                AgentCollectionItem.formatAmount(line.remaining),
                 style: const TextStyle(fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 7),
               ElevatedButton(
-                onPressed: () => _showCollectPaymentSheet(group),
+                onPressed: group == null || line.settled
+                    ? null
+                    : () => _showCollectPaymentSheet(group),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFA9791F),
                   foregroundColor: Colors.white,
@@ -800,20 +960,34 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
   }
 
   Widget _buildTodaysCollections(bool isNarrow) {
-    final today = DateTime.now();
-    final rows = _collections.where((row) {
-      final date = _parseDate(row['date'] ?? '');
-      return date != null &&
-          date.year == today.year &&
-          date.month == today.month &&
-          date.day == today.day;
-    }).toList();
-    final byAgent = <String, List<Map<String, String>>>{};
+    final rows = _collections.where(_isToday).toList();
+    // Same grouping as the web app: by the collecting agent's id, named from
+    // their profile, else the name on the receipt, else "Recorded directly".
+    final byAgentKey = <String, List<Map<String, String>>>{};
+    final agentLabel = <String, String>{};
     for (final row in rows) {
-      byAgent.putIfAbsent(row['agent'] ?? 'Unassigned', () => []).add(row);
+      final agentId = row['agent_id'] ?? '';
+      final key = agentId.isEmpty ? '\u0000none' : agentId;
+      byAgentKey.putIfAbsent(key, () => []).add(row);
+      final receiptName = (row['agent'] ?? '').trim();
+      agentLabel[key] = _agentNameById[agentId] ??
+          (receiptName.isNotEmpty && receiptName != 'Unassigned'
+              ? receiptName
+              : 'Recorded directly');
     }
-    final total =
-        rows.fold<double>(0, (sum, row) => sum + _parseAmount(row['amount']!));
+    double sumOf(List<Map<String, String>> list) => list.fold<double>(
+        0, (sum, row) => sum + _parseAmount(row['amount'] ?? '0'));
+    final sortedKeys = byAgentKey.keys.toList()
+      ..sort((a, b) {
+        final byAmount = sumOf(byAgentKey[b]!).compareTo(sumOf(byAgentKey[a]!));
+        return byAmount != 0
+            ? byAmount
+            : agentLabel[a]!.compareTo(agentLabel[b]!);
+      });
+    final byAgent = <String, List<Map<String, String>>>{
+      for (final key in sortedKeys) agentLabel[key]!: byAgentKey[key]!,
+    };
+    final total = sumOf(rows);
 
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: isNarrow ? 20 : 24),

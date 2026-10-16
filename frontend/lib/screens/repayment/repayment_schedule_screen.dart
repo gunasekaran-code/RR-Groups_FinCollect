@@ -1061,12 +1061,13 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
     final nextDueId =
         _unpaidInstallments.isNotEmpty ? _unpaidInstallments.first.id : null;
 
-    return _buildInstallmentDataTable(nextDueId, l10n);
+    return _buildInstallmentDataTable(nextDueId, isNarrow, l10n);
   }
 
   static const double _tableHeadingHeight = 50;
 
-  Widget _buildInstallmentDataTable(String? nextDueId, AppLocalizations l10n) {
+  Widget _buildInstallmentDataTable(
+      String? nextDueId, bool isNarrow, AppLocalizations l10n) {
     Color rowColor(RepaymentInstallment inst, int index) {
       if (inst.status == 'paid') {
         return AppColors.kSuccess.withValues(alpha: 0.07);
@@ -1094,14 +1095,27 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
         child: LayoutBuilder(builder: (context, constraints) {
+          // Keep the key date and amount columns in consistent positions on
+          // mobile and tablet. The viewport scrolls horizontally rather than
+          // compressing those columns into each other.
+          final tableWidth = constraints.maxWidth < 700
+              ? 1000.0
+              : constraints.maxWidth < 1100
+                  ? 1120.0
+                  : constraints.maxWidth;
+          final columnSpacing = tableWidth >= 1200
+              ? 40.0
+              : tableWidth >= 760
+                  ? 28.0
+                  : 20.0;
           final table = DataTable(
             // Transparent so the gold gradient strip painted behind it shows
             // through.
             headingRowColor: WidgetStateProperty.all(Colors.transparent),
             headingRowHeight: _tableHeadingHeight,
-            dataRowMinHeight: 54,
-            dataRowMaxHeight: 58,
-            columnSpacing: 28,
+            dataRowMinHeight: 68,
+            dataRowMaxHeight: 72,
+            columnSpacing: columnSpacing,
             dividerThickness: 0.6,
             headingTextStyle: const TextStyle(
               color: AppColors.kTextOnDark,
@@ -1113,12 +1127,23 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
                 const TextStyle(color: AppColors.kTextDark, fontSize: 13),
             columns: [
               DataColumn(label: Text(l10n.repaymentColInstNo)),
-              // The due-date column soaks up spare width so the table always
-              // spans the card.
+              // Date columns share surplus width on desktop, creating a
+              // deliberate gap before the financial columns. On narrower
+              // screens they collapse to their intrinsic width and the table
+              // remains horizontally scrollable.
               DataColumn(
                 label: Text(l10n.repaymentColDueDate),
                 columnWidth: const MaxColumnWidth(
                     IntrinsicColumnWidth(), FlexColumnWidth()),
+              ),
+              DataColumn(
+                label: Align(
+                  alignment: Alignment.center,
+                  child: Text(l10n.repaymentColPaidDate),
+                ),
+                headingRowAlignment: MainAxisAlignment.center,
+                columnWidth: const MaxColumnWidth(
+                    IntrinsicColumnWidth(), FlexColumnWidth(1.25)),
               ),
               DataColumn(label: Text(l10n.repaymentColEmiAmount)),
               DataColumn(label: Text(l10n.repaymentColPaid)),
@@ -1136,7 +1161,11 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
                     return rowColor(_installments[i], i);
                   }),
                   cells: _installmentCells(
-                      _installments[i], _installments[i].id == nextDueId, l10n),
+                    _installments[i],
+                    _installments[i].id == nextDueId,
+                    isNarrow,
+                    l10n,
+                  ),
                 ),
             ],
           );
@@ -1148,8 +1177,8 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               physics: const ClampingScrollPhysics(),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minWidth: constraints.maxWidth),
+              child: SizedBox(
+                width: tableWidth,
                 child: Stack(
                   fit: StackFit.passthrough,
                   children: [
@@ -1182,7 +1211,11 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
   }
 
   List<DataCell> _installmentCells(
-      RepaymentInstallment inst, bool isNextDue, AppLocalizations l10n) {
+    RepaymentInstallment inst,
+    bool isNextDue,
+    bool isNarrow,
+    AppLocalizations l10n,
+  ) {
     return [
       DataCell(Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -1195,31 +1228,10 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
             style: const TextStyle(
                 fontWeight: FontWeight.w700, color: AppColors.kGoldDark)),
       )),
-      DataCell(Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(inst.dueDateDisplay),
-          if (isNextDue) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: AppColors.gold50,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: AppColors.gold300),
-              ),
-              child: Text(
-                l10n.repaymentStatNextDue,
-                style: const TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.kGoldDark,
-                  letterSpacing: 0.3,
-                ),
-              ),
-            ),
-          ],
-        ],
+      DataCell(_dueDateCell(inst, isNextDue, isNarrow, l10n)),
+      DataCell(Align(
+        alignment: Alignment.center,
+        child: _paidDateCell(inst, l10n),
       )),
       DataCell(Text(inst.amountDisplay)),
       DataCell(Text(inst.paidDisplay,
@@ -1235,6 +1247,91 @@ class _RepaymentScheduleScreenState extends State<RepaymentScheduleScreen> {
               fontWeight: FontWeight.w600))),
       DataCell(_installmentStatusPill(inst)),
     ];
+  }
+
+  Widget _dueDateCell(
+    RepaymentInstallment inst,
+    bool isNextDue,
+    bool isNarrow,
+    AppLocalizations l10n,
+  ) {
+    if (!isNextDue) return Text(inst.dueDateDisplay);
+
+    final badge = _nextDueBadge(l10n);
+    if (isNarrow) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(inst.dueDateDisplay),
+          const SizedBox(height: 4),
+          badge,
+        ],
+      );
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(inst.dueDateDisplay),
+        const SizedBox(width: 8),
+        badge,
+      ],
+    );
+  }
+
+  Widget _nextDueBadge(AppLocalizations l10n) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppColors.gold50,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.gold300),
+      ),
+      child: Text(
+        l10n.repaymentStatNextDue,
+        style: const TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w800,
+          color: AppColors.kGoldDark,
+          letterSpacing: 0.3,
+        ),
+      ),
+    );
+  }
+
+  Widget _paidDateCell(RepaymentInstallment inst, AppLocalizations l10n) {
+    final paidDate = inst.paidDate;
+    final dueDate = inst.dueDate;
+    if (paidDate == null) return const Text('-');
+
+    // Compare date-only values so a time component from the API cannot turn
+    // a same-day collection into a one-day-late payment.
+    final daysLate = dueDate == null
+        ? 0
+        : DateUtils.dateOnly(paidDate)
+            .difference(DateUtils.dateOnly(dueDate))
+            .inDays;
+    final isLate = daysLate > 0;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(inst.paidDateDisplay),
+        const SizedBox(height: 2),
+        Text(
+          isLate
+              ? l10n.repaymentPaidDaysLate(daysLate)
+              : l10n.repaymentPaidOnTime,
+          style: TextStyle(
+            color: isLate ? AppColors.kWarning : AppColors.kSuccess,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
   }
 
   /// Gold pill with a status-coloured dot, matching the loan status pills.

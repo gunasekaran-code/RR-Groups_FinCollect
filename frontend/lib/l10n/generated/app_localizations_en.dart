@@ -638,6 +638,16 @@ class AppLocalizationsEn extends AppLocalizations {
   String get loansStatusPending => 'Pending';
 
   @override
+  String loansSchedulePaidOn(String date) {
+    return 'Paid on $date';
+  }
+
+  @override
+  String loansSchedulePaidProgress(String paid, String total) {
+    return '$paid of $total paid';
+  }
+
+  @override
   String get loansScheduleStatusPaid => 'Paid';
 
   @override
@@ -1179,6 +1189,23 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get repaymentColDueDate => 'DUE DATE';
+
+  @override
+  String get repaymentColPaidDate => 'PAID DATE';
+
+  @override
+  String get repaymentPaidOnTime => 'on time';
+
+  @override
+  String repaymentPaidDaysLate(num days) {
+    String _temp0 = intl.Intl.pluralLogic(
+      days,
+      locale: localeName,
+      other: '$days days late',
+      one: '1 day late',
+    );
+    return '$_temp0';
+  }
 
   @override
   String get repaymentColEmiAmount => 'EMI AMOUNT';

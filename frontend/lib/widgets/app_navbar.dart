@@ -44,10 +44,14 @@ const List<_NavItem> _customerNavItems = [
       label: 'Dashboard',
       icon: CupertinoIcons.square_grid_2x2,
       route: AppRoutes.dashboard),
+  // _NavItem(
+  //     label: 'My Loans',
+  //     icon: CupertinoIcons.building_2_fill,
+  //     route: AppRoutes.loans),
   _NavItem(
-      label: 'My Loans',
-      icon: CupertinoIcons.building_2_fill,
-      route: AppRoutes.loans),
+      label: 'My Chits', 
+      icon: CupertinoIcons.building_2_fill, // You can change this icon if needed (e.g., CupertinoIcons.doc_text)
+      route: AppRoutes.chitGroups),
   _NavItem(
       label: 'My Funds',
       icon: CupertinoIcons.money_dollar_circle,

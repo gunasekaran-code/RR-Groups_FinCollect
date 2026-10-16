@@ -8,6 +8,8 @@ import '../../widgets/status_badge.dart';
 import '../../theme/confirm_dialog.dart';
 import '../../theme/glass_toast.dart';
 import '../../models/loan_record.dart';
+import '../../models/repayment_installment.dart';
+import '../../services/api_service_repayment.dart' show ApiServiceRepayment;
 import '../../models/customer.dart';
 import '../../models/agent.dart';
 import '../../models/user_role.dart';
@@ -20,9 +22,8 @@ import '../../l10n/generated/app_localizations.dart';
 // REPAYMENT SCHEDULE — shared helpers/widget
 // ==========================================
 //
-// These are used by both the Create/Edit Loan form (schedule *preview*,
-// no payment data) and the Loan Detail view (schedule with placeholder
-// paid/balance/status, since there's no repayments API wired up yet).
+// Used by the Create/Edit Loan form to preview a schedule before it exists.
+// The Loan Detail view shows the real saved schedule (see LoanScheduleView).
 
 /// A single row in a computed repayment schedule.
 class RepaymentEntry {
@@ -121,31 +122,6 @@ List<RepaymentEntry> buildRepaymentSchedule({
     entries.add(RepaymentEntry(index: k, dueDate: due, amount: amount));
   }
   return entries;
-}
-
-/// ASSUMPTION: there's no repayments/transactions endpoint yet, so paid
-/// amounts and statuses can't be pulled from the server. This fills in a
-/// best-effort status purely from today's date vs. due date. Replace this
-/// with real data once a repayments API exists.
-void applyPlaceholderScheduleStatus(
-    List<RepaymentEntry> entries, String loanStatus) {
-  final now = DateTime.now();
-  final today = DateTime(now.year, now.month, now.day);
-  for (final e in entries) {
-    if (loanStatus == 'Closed') {
-      e.paidAmount = e.amount;
-      e.status = 'Paid';
-      continue;
-    }
-    final due = DateTime(e.dueDate.year, e.dueDate.month, e.dueDate.day);
-    if (due.isBefore(today)) {
-      e.status = 'Overdue';
-    } else if (due.isAtSameMomentAs(today)) {
-      e.status = 'Due Today';
-    } else {
-      e.status = 'Pending';
-    }
-  }
 }
 
 BadgeTone _scheduleStatusTone(String status) {
@@ -1337,7 +1313,8 @@ class LoanDetailDialog extends StatefulWidget {
 
 class _LoanDetailDialogState extends State<LoanDetailDialog> {
   bool _showSchedule = false;
-  List<RepaymentEntry> _schedule = [];
+  // Bumped by the refresh button so the schedule refetches from the server.
+  int _scheduleReload = 0;
 
   String _durationLabel(LoanRecord loan, AppLocalizations l10n) {
     switch (loan.collectionType) {
@@ -1352,50 +1329,8 @@ class _LoanDetailDialogState extends State<LoanDetailDialog> {
     }
   }
 
-  void _regenerateSchedule() {
-    final loan = widget.loan;
-    final startDate = tryParseFlexibleDate(loan.startDate ?? '');
-    if (startDate == null || loan.principalAmount <= 0 || loan.emiAmount <= 0) {
-      _schedule = [];
-      return;
-    }
-
-    final periods = loan.durationUnits;
-
-    final double totalAmount;
-    switch (loan.collectionType) {
-      case 'Daily':
-        totalAmount = loan.principalAmount +
-            loan.principalAmount * (loan.interestRate / 100);
-        break;
-      case 'Weekly':
-        totalAmount = loan.principalAmount;
-        break;
-      default: // Monthly (EMI or Interest-only)
-        totalAmount = loan.emiAmount * periods;
-    }
-
-    final scheduleFrequency =
-        loan.collectionType == 'Weekly' || loan.collectionType == 'Daily'
-            ? loan.collectionType
-            : 'Monthly';
-
-    final entries = buildRepaymentSchedule(
-      collectionType: scheduleFrequency,
-      startDate: startDate,
-      periods: periods,
-      installment: loan.emiAmount,
-      totalAmount: totalAmount,
-    );
-    applyPlaceholderScheduleStatus(entries, loan.status);
-    _schedule = entries;
-  }
-
   void _toggleSchedule() {
-    setState(() {
-      _showSchedule = !_showSchedule;
-      if (_showSchedule) _regenerateSchedule();
-    });
+    setState(() => _showSchedule = !_showSchedule);
   }
 
   Widget _field(String label, String value) {
@@ -1547,7 +1482,7 @@ class _LoanDetailDialogState extends State<LoanDetailDialog> {
                 IconButton(
                   icon: const Icon(Icons.refresh, size: 18),
                   tooltip: l10n.loansRefreshScheduleTooltip,
-                  onPressed: () => setState(_regenerateSchedule),
+                  onPressed: () => setState(() => _scheduleReload++),
                 ),
               ],
             ),
@@ -1558,22 +1493,624 @@ class _LoanDetailDialogState extends State<LoanDetailDialog> {
                 style: const TextStyle(fontSize: 12, color: AppColors.kTextMuted),
               ),
             ],
-            const SizedBox(height: 4),
-            Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: AppColors.kBorder),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: RepaymentScheduleTable(
-                entries: _schedule,
-                showPaymentColumns: true,
-                maxHeight: 320,
-              ),
+            const SizedBox(height: 8),
+            LoanScheduleView(
+              key: ValueKey('${loan.id}-$_scheduleReload'),
+              loan: loan,
             ),
           ],
         ],
       ),
+    );
+  }
+}
+
+/// The loan's real repayment schedule — the same `repayment_schedule` rows
+/// the Repayment screen reads, so paid amounts, balances, penalties and
+/// statuses match it exactly. A table on tablets and wider, cards on phones.
+class LoanScheduleView extends StatefulWidget {
+  final LoanRecord loan;
+  const LoanScheduleView({super.key, required this.loan});
+
+  @override
+  State<LoanScheduleView> createState() => _LoanScheduleViewState();
+}
+
+class _ScheduleData {
+  final List<RepaymentInstallment> rows;
+  final Map<String, DateTime> paidOn; // installment id -> date fully paid
+  const _ScheduleData(this.rows, this.paidOn);
+}
+
+class _LoanScheduleViewState extends State<LoanScheduleView> {
+  late final Future<_ScheduleData> _future = _load();
+
+  Future<_ScheduleData> _load() async {
+    final loan = widget.loan;
+    final rows = await ApiServiceRepayment.instance.fetchSchedule(loan.id);
+
+    // Paid-on dates. The backend pays instalments oldest-first from the
+    // loan's receipts in date order (penalty money excluded), so replaying
+    // the receipts shows the day each instalment's paid amount was reached.
+    // Interest-only loans settle differently, so they show no date.
+    final paidOn = <String, DateTime>{};
+    final isInterestOnly = collectionTypeOptionKey(loan) == 'Monthly Interest';
+    if (!isInterestOnly && rows.any((r) => r.paidAmount > 0)) {
+      List<Map<String, dynamic>> receipts = const [];
+      try {
+        receipts = await ApiClient.instance.list('collections', query: {
+          'loan_id': 'eq.${loan.id}',
+          'select':
+              'collection_amount,penalty_amount,collection_date,created_at',
+          'order': 'collection_date.asc,created_at.asc',
+        });
+      } catch (_) {
+        // Dates are a nicety; the schedule still shows without them.
+      }
+
+      double asNum(dynamic v) => double.tryParse(v?.toString() ?? '') ?? 0;
+      final events = <MapEntry<DateTime, double>>[];
+      for (final r in receipts) {
+        final date = DateTime.tryParse(
+            (r['collection_date'] ?? r['created_at'] ?? '').toString());
+        if (date == null) continue;
+        final amount = asNum(r['collection_amount']);
+        final penalty = asNum(r['penalty_amount']).clamp(0.0, amount);
+        final toLoan = amount - penalty;
+        if (toLoan > 0) events.add(MapEntry(date, toLoan));
+      }
+
+      var paidBefore = 0.0;
+      for (final row in rows) {
+        if (row.paidAmount <= 0) break;
+        final target = paidBefore + row.paidAmount - 0.01;
+        var running = 0.0;
+        for (final e in events) {
+          running += e.value;
+          if (running >= target) {
+            paidOn[row.id] = e.key;
+            break;
+          }
+        }
+        paidBefore += row.paidAmount;
+      }
+    }
+    return _ScheduleData(rows, paidOn);
+  }
+
+  static String _date(DateTime? d) => d == null ? '-' : _formatScheduleDate(d);
+
+  ({String label, Color color, Color bg}) _status(
+      String status, AppLocalizations l10n) {
+    switch (status) {
+      case 'paid':
+        return (
+          label: l10n.loansScheduleStatusPaid,
+          color: AppColors.kSuccess,
+          bg: const Color(0xFFDCFCE7)
+        );
+      case 'partial':
+        return (
+          label: l10n.custDashStatusPartial,
+          color: AppColors.kInfo,
+          bg: const Color(0xFFDCEAFE)
+        );
+      case 'overdue':
+        return (
+          label: l10n.loansStatusOverdue,
+          color: AppColors.kDanger,
+          bg: const Color(0xFFFEE2E2)
+        );
+      default:
+        return (
+          label: l10n.loansStatusPending,
+          color: AppColors.kWarning,
+          bg: const Color(0xFFFEF3C7)
+        );
+    }
+  }
+
+  Widget _statusChip(String status, AppLocalizations l10n) {
+    final s = _status(status, l10n);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: s.bg,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: s.color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 5),
+          Text(s.label,
+              style: TextStyle(
+                  fontSize: 11, fontWeight: FontWeight.w700, color: s.color)),
+        ],
+      ),
+    );
+  }
+
+  Widget _nextDueTag(AppLocalizations l10n) => Container(
+        margin: const EdgeInsets.only(left: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: AppColors.gold100,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: AppColors.gold300),
+        ),
+        child: Text(l10n.repaymentStatNextDue,
+            style: const TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
+                color: AppColors.gold800)),
+      );
+
+  Widget _paidOnLine(DateTime? date, AppLocalizations l10n) {
+    if (date == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.check_circle, size: 11, color: AppColors.kSuccess),
+          const SizedBox(width: 3),
+          Flexible(
+            child: Text(l10n.loansSchedulePaidOn(_date(date)),
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.kSuccess)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // -- summary -------------------------------------------------------------
+
+  Widget _summary(List<RepaymentInstallment> rows, AppLocalizations l10n) {
+    final total = rows.length;
+    final paidCount = rows.where((r) => r.status == 'paid').length;
+    final overdueCount = rows.where((r) => r.status == 'overdue').length;
+    final pendingCount = total - paidCount - overdueCount;
+    final scheduled = rows.fold<double>(0, (s, r) => s + r.emiAmount);
+    final paid = rows.fold<double>(0, (s, r) => s + r.paidAmount);
+    final progress = scheduled <= 0 ? 0.0 : (paid / scheduled).clamp(0.0, 1.0);
+    final next = rows.where((r) => r.status != 'paid').toList();
+
+    Widget chip(String label, String value, Color color, IconData icon) =>
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: color.withValues(alpha: 0.25)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: color),
+              const SizedBox(width: 6),
+              Text('$label  ',
+                  style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.kTextMuted)),
+              Text(value,
+                  style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w800, color: color)),
+            ],
+          ),
+        );
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [AppColors.gold50, AppColors.kSurface],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.gold200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  l10n.loansSchedulePaidProgress(LoanRecord.formatRupees(paid),
+                      LoanRecord.formatRupees(scheduled)),
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.gold900),
+                ),
+              ),
+              Text('${(progress * 100).round()}%',
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.kSuccess)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 8,
+              backgroundColor: AppColors.gold100,
+              valueColor: const AlwaysStoppedAnimation(AppColors.kSuccess),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              chip(l10n.repaymentStatPaid, '$paidCount', AppColors.kSuccess,
+                  Icons.check_circle_outline),
+              chip(l10n.repaymentStatPending, '$pendingCount',
+                  AppColors.kWarning, Icons.hourglass_bottom_rounded),
+              chip(l10n.repaymentStatOverdue, '$overdueCount',
+                  AppColors.kDanger, Icons.error_outline),
+              chip(
+                  l10n.repaymentStatNextDue,
+                  next.isEmpty ? '-' : _date(next.first.dueDate),
+                  AppColors.gold700,
+                  Icons.event_outlined),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // -- wide: table ---------------------------------------------------------
+
+  Widget _table(_ScheduleData data, String? nextDueId, AppLocalizations l10n) {
+    const head = TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w800,
+        color: Colors.white,
+        letterSpacing: 0.3);
+    const cell = TextStyle(fontSize: 13, color: AppColors.kTextDark);
+
+    Widget money(double v, {Color? color, bool bold = false}) => Text(
+          LoanRecord.formatRupees(v),
+          style: cell.copyWith(
+              color: color,
+              fontWeight: bold ? FontWeight.w700 : FontWeight.w500),
+        );
+
+    Widget row(int i, RepaymentInstallment r) {
+      final isNext = r.id == nextDueId;
+      final Color bg = r.status == 'paid'
+          ? const Color(0xFFF0FDF4)
+          : isNext
+              ? AppColors.gold50
+              : (i.isEven ? AppColors.kSurface : AppColors.kBackground);
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: bg,
+          border: const Border(
+              bottom: BorderSide(color: AppColors.kBorder, width: 0.5)),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 48,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.kSurface,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: AppColors.gold300),
+                  ),
+                  child: Text('#${r.installmentNo}',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.gold800)),
+                ),
+              ),
+            ),
+            Expanded(
+              flex: 3,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                          child: Text(_date(r.dueDate),
+                              overflow: TextOverflow.ellipsis, style: cell)),
+                      if (isNext) _nextDueTag(l10n),
+                    ],
+                  ),
+                  _paidOnLine(data.paidOn[r.id], l10n),
+                ],
+              ),
+            ),
+            Expanded(flex: 2, child: money(r.emiAmount)),
+            Expanded(
+                flex: 2,
+                child: money(r.paidAmount,
+                    color: r.paidAmount > 0
+                        ? AppColors.kSuccess
+                        : AppColors.kTextMuted,
+                    bold: r.paidAmount > 0)),
+            Expanded(
+                flex: 2,
+                child: money(r.balance,
+                    color: r.balance > 0 ? AppColors.gold800 : AppColors.kSuccess,
+                    bold: r.balance > 0)),
+            Expanded(
+                flex: 2,
+                child: money(r.penaltyAmount,
+                    color: r.penaltyAmount > 0
+                        ? AppColors.kDanger
+                        : AppColors.kTextMuted)),
+            SizedBox(
+                width: 92,
+                child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: _statusChip(r.status, l10n))),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.gold200),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                  colors: [AppColors.gold600, AppColors.gold700]),
+            ),
+            child: Row(
+              children: [
+                SizedBox(
+                    width: 48,
+                    child: Text(l10n.loansScheduleColIndex, style: head)),
+                Expanded(
+                    flex: 3,
+                    child: Text(l10n.repaymentColDueDate, style: head)),
+                Expanded(
+                    flex: 2,
+                    child: Text(l10n.repaymentColEmiAmount, style: head)),
+                Expanded(
+                    flex: 2, child: Text(l10n.repaymentColPaid, style: head)),
+                Expanded(
+                    flex: 2,
+                    child: Text(l10n.repaymentColBalance, style: head)),
+                Expanded(
+                    flex: 2,
+                    child: Text(l10n.repaymentColPenalty, style: head)),
+                SizedBox(
+                    width: 92,
+                    child: Text(l10n.repaymentColStatus, style: head)),
+              ],
+            ),
+          ),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 420),
+            child: Scrollbar(
+              thumbVisibility: true,
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                itemCount: data.rows.length,
+                itemBuilder: (_, i) => row(i, data.rows[i]),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // -- narrow: cards -------------------------------------------------------
+
+  Widget _cards(_ScheduleData data, String? nextDueId, AppLocalizations l10n) {
+    Widget figure(String label, double v, Color color) => Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label,
+                  style: const TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.kTextMuted)),
+              const SizedBox(height: 2),
+              Text(LoanRecord.formatRupees(v),
+                  style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w700, color: color)),
+            ],
+          ),
+        );
+
+    Widget card(RepaymentInstallment r) {
+      final isNext = r.id == nextDueId;
+      final accent = _status(r.status, l10n).color;
+      return Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        decoration: BoxDecoration(
+          color: r.status == 'paid'
+              ? const Color(0xFFF0FDF4)
+              : isNext
+                  ? AppColors.gold50
+                  : AppColors.kSurface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+              color: isNext ? AppColors.gold300 : AppColors.kBorder),
+        ),
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                width: 4,
+                decoration: BoxDecoration(
+                  color: accent,
+                  borderRadius: const BorderRadius.horizontal(
+                      left: Radius.circular(12)),
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 10, 12, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text('#${r.installmentNo}',
+                              style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.gold800)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Row(
+                              children: [
+                                Flexible(
+                                  child: Text(_date(r.dueDate),
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: AppColors.kTextDark)),
+                                ),
+                                if (isNext) _nextDueTag(l10n),
+                              ],
+                            ),
+                          ),
+                          _statusChip(r.status, l10n),
+                        ],
+                      ),
+                      _paidOnLine(data.paidOn[r.id], l10n),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          figure(l10n.repaymentColEmiAmount, r.emiAmount,
+                              AppColors.kTextDark),
+                          figure(
+                              l10n.repaymentColPaid,
+                              r.paidAmount,
+                              r.paidAmount > 0
+                                  ? AppColors.kSuccess
+                                  : AppColors.kTextMuted),
+                          figure(
+                              l10n.repaymentColBalance,
+                              r.balance,
+                              r.balance > 0
+                                  ? AppColors.gold800
+                                  : AppColors.kSuccess),
+                          if (r.penaltyAmount > 0)
+                            figure(l10n.repaymentColPenalty, r.penaltyAmount,
+                                AppColors.kDanger),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxHeight: 440),
+      child: Scrollbar(
+        thumbVisibility: true,
+        child: ListView.builder(
+          shrinkWrap: true,
+          padding: EdgeInsets.zero,
+          itemCount: data.rows.length,
+          itemBuilder: (_, i) => card(data.rows[i]),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return FutureBuilder<_ScheduleData>(
+      future: _future,
+      builder: (context, snap) {
+        if (snap.connectionState != ConnectionState.done) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (snap.hasError) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 20),
+            child: Text(l10n.repaymentCouldNotLoadSchedule,
+                style: const TextStyle(color: AppColors.kDanger, fontSize: 13)),
+          );
+        }
+        final data = snap.data!;
+        if (data.rows.isEmpty) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 20),
+            child: Text(l10n.loansScheduleEmptyMessage,
+                style:
+                    const TextStyle(color: AppColors.kTextMuted, fontSize: 13)),
+          );
+        }
+
+        // Same "next due" as the Repayment screen: earliest unpaid instalment.
+        final unpaid = data.rows.where((r) => r.status != 'paid').toList()
+          ..sort((a, b) {
+            final ad = a.dueDate, bd = b.dueDate;
+            if (ad == null && bd == null) return 0;
+            if (ad == null) return 1;
+            if (bd == null) return -1;
+            return ad.compareTo(bd);
+          });
+        final nextDueId = unpaid.isEmpty ? null : unpaid.first.id;
+
+        return LayoutBuilder(builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 600;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _summary(data.rows, l10n),
+              const SizedBox(height: 12),
+              wide
+                  ? _table(data, nextDueId, l10n)
+                  : _cards(data, nextDueId, l10n),
+            ],
+          );
+        });
+      },
     );
   }
 }

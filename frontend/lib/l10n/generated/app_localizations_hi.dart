@@ -637,6 +637,16 @@ class AppLocalizationsHi extends AppLocalizations {
   String get loansStatusPending => 'लंबित';
 
   @override
+  String loansSchedulePaidOn(String date) {
+    return '$date को भुगतान';
+  }
+
+  @override
+  String loansSchedulePaidProgress(String paid, String total) {
+    return '$total में से $paid भुगतान';
+  }
+
+  @override
   String get loansScheduleStatusPaid => 'भुगतान किया गया';
 
   @override
@@ -1219,6 +1229,17 @@ class AppLocalizationsHi extends AppLocalizations {
 
   @override
   String get repaymentColDueDate => 'देय तिथि';
+
+  @override
+  String get repaymentColPaidDate => 'भुगतान तिथि';
+
+  @override
+  String get repaymentPaidOnTime => 'समय पर';
+
+  @override
+  String repaymentPaidDaysLate(num days) {
+    return '$days दिन देर से';
+  }
 
   @override
   String get repaymentColEmiAmount => 'ईएमआई राशि';

@@ -4,6 +4,7 @@ class RepaymentInstallment {
   final String loanId;
   final int installmentNo;
   final DateTime? dueDate;
+  final DateTime? paidDate;
   final double emiAmount;
   final double paidAmount;
   final double balance;
@@ -16,6 +17,7 @@ class RepaymentInstallment {
     required this.loanId,
     required this.installmentNo,
     required this.dueDate,
+    this.paidDate,
     required this.emiAmount,
     required this.paidAmount,
     required this.balance,
@@ -24,7 +26,7 @@ class RepaymentInstallment {
     this.createdAt,
   });
 
-factory RepaymentInstallment.fromJson(Map<String, dynamic> json) {
+  factory RepaymentInstallment.fromJson(Map<String, dynamic> json) {
     // Renamed from 'num' to 'parseDouble' to avoid shadowing Dart's built-in num type
     double parseDouble(dynamic v) {
       if (v == null) return 0;
@@ -40,11 +42,15 @@ factory RepaymentInstallment.fromJson(Map<String, dynamic> json) {
     return RepaymentInstallment(
       id: json['id']?.toString() ?? '',
       loanId: json['loan_id']?.toString() ?? '',
-      installmentNo: int.tryParse(json['installment_no']?.toString() ?? '') ?? 0,
+      installmentNo:
+          int.tryParse(json['installment_no']?.toString() ?? '') ?? 0,
       dueDate: date(json['due_date']),
-      emiAmount: parseDouble(json['emi_amount']), 
-      paidAmount: parseDouble(json['paid_amount']), 
-      balance: parseDouble(json['balance']), 
+      // The repayment-schedule API returns the date a collection was applied
+      // to this installment as `paid_date`.
+      paidDate: date(json['paid_date']),
+      emiAmount: parseDouble(json['emi_amount']),
+      paidAmount: parseDouble(json['paid_amount']),
+      balance: parseDouble(json['balance']),
       penaltyAmount: parseDouble(json['penalty_amount']),
       status: (json['status'] ?? 'pending').toString(),
       createdAt: date(json['created_at']),
@@ -56,6 +62,7 @@ factory RepaymentInstallment.fromJson(Map<String, dynamic> json) {
         'loan_id': loanId,
         'installment_no': installmentNo,
         'due_date': dueDate?.toIso8601String().split('T').first,
+        'paid_date': paidDate?.toIso8601String().split('T').first,
         'emi_amount': emiAmount,
         'paid_amount': paidAmount,
         'balance': balance,
@@ -108,12 +115,28 @@ factory RepaymentInstallment.fromJson(Map<String, dynamic> json) {
   String get penaltyDisplay => _fmtCurrency(penaltyAmount);
 
   String get dueDateDisplay {
-    if (dueDate == null) return '-';
+    return _dateDisplay(dueDate);
+  }
+
+  String get paidDateDisplay => _dateDisplay(paidDate);
+
+  String _dateDisplay(DateTime? date) {
+    if (date == null) return '-';
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
     ];
-    return '${dueDate!.day.toString().padLeft(2, '0')} '
-        '${months[dueDate!.month - 1]} ${dueDate!.year}';
+    return '${date.day.toString().padLeft(2, '0')} '
+        '${months[date.month - 1]} ${date.year}';
   }
 }

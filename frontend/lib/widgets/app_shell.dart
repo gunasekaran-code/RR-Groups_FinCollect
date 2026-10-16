@@ -19,6 +19,7 @@ import '../screens/notifications/notification_state.dart';
 import '../screens/repayment/repayment_schedule_screen.dart';
 import '../screens/settings/profile_page.dart';
 import '../theme/confirm_dialog.dart'; // Adjust path if needed
+import '../screens/chit_groups/chit_groups_screen.dart';
 import 'app_navbar.dart';
 import 'notifications_dropdown_panel.dart';
 import 'app_drawer.dart';
@@ -65,6 +66,7 @@ class AppShell extends StatefulWidget {
     AppRoutes.loans: 'Loans',
     AppRoutes.repayment: 'Repayment Schedule',
     AppRoutes.collections: 'Collections',
+    AppRoutes.chitGroups: 'Chits',
     AppRoutes.funds: 'My Funds',
     AppRoutes.notifications: 'Notifications',
     AppRoutes.profile: 'My Profile',
@@ -628,6 +630,7 @@ actions: [
         AppRoutes.repayment => const RepaymentScheduleScreen(),
         AppRoutes.funds => const FundsScreen(),
         AppRoutes.notifications => const NotificationsScreen(),
+        AppRoutes.chitGroups => const ChitGroupsScreen(),
         AppRoutes.collections => user?.role == UserRole.agent
             ? const AgentCollectionScreen()
             : const CollectionsScreen(),
