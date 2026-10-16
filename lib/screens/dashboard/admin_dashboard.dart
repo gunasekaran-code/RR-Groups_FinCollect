@@ -1,0 +1,1318 @@
+import 'dart:math' as math;
+import 'dart:ui';
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import '../../models/app_user.dart';
+import '../../models/report_model.dart';
+import '../../routes/app_routes.dart';
+import '../../models/account_ledger_model.dart';
+import '../../services/account_ledger_service.dart';
+import '../../services/api_client.dart';
+import '../../services/customer_api_service.dart';
+import '../../services/report_service.dart';
+import '../../services/session_service.dart';
+import '../Promotional Popup/promotional_popup.dart';
+import '../../theme/app_theme.dart';
+import '../../widgets/app_shell.dart';
+import '../../widgets/stat_card.dart';
+import '../../l10n/generated/app_localizations.dart';
+import '../../widgets/responsive_stat_grid.dart';
+
+String formatIndianCurrency(double? amount) {
+  if (amount == null) return '₹0';
+  final format =
+      NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0);
+  return format.format(amount);
+}
+
+class DashboardScreen extends StatefulWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  late Future<_DashboardData> _future;
+  Timer? _clockTimer;
+  DateTime _now = DateTime.now();
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) showActivePromoPopup(context);
+    });
+    _clockTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() => _now = DateTime.now());
+    });
+  }
+
+  @override
+  void dispose() {
+    _clockTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<_DashboardData> _load() async {
+    final today = DateTime.now();
+    final monthStart = DateTime(today.year, today.month, 1);
+    final daily = await ReportService.instance.fetchDailyReport(date: today);
+    final monthly = await ReportService.instance.fetchMonthlyReport(
+      start: monthStart,
+      end: today,
+    );
+    final agent = await ReportService.instance.fetchAgentReport(
+      start: monthStart,
+      end: today,
+    );
+    final ledger = await AccountLedgerService().fetchSummary();
+    final customers = await CustomerApiService().fetchAll();
+    // A customer is inactive when their login is switched off
+    // (profiles.status = 'inactive'). Only the ids are fetched — the count
+    // is all the card needs.
+    final inactiveProfiles = await ApiClient.instance.list(
+      'profiles',
+      query: {
+        'select': 'id',
+        'role': 'eq.customer',
+        'status': 'eq.inactive',
+      },
+    );
+    final inactiveCustomers = inactiveProfiles.length;
+    // Every loan ever given (deleted ones excluded by the API), not just
+    // this month's — only the columns the two cards need are fetched.
+    final loanTotals = await ApiClient.instance.list(
+      'loans',
+      query: {
+        'select': 'loan_amount,total_interest,total_repayment,'
+            'outstanding_balance,status,loan_type,loan_duration',
+      },
+    );
+    double sumOf(String column) => loanTotals.fold<double>(
+          0,
+          (sum, row) =>
+              sum + (double.tryParse(row[column]?.toString() ?? '') ?? 0),
+        );
+    final totalLoanAmount = sumOf('loan_amount');
+    // Interest actually earned so far — the web dashboard's "Interest
+    // Earned", same rule, so the two always agree.
+    final totalInterest = _round2(loanTotals.fold<double>(
+      0,
+      (sum, row) => sum + _interestEarned(row),
+    ));
+    // The latest 5 of each, whatever day they fall on — newest first.
+    final recentCollections = await ApiClient.instance.list(
+      'collections',
+      query: {'order': 'collection_date.desc,created_at.desc', 'limit': '5'},
+    );
+    final recentLoans = await ApiClient.instance.list(
+      'loans',
+      query: {'order': 'created_at.desc', 'limit': '5'},
+    );
+    return _DashboardData(
+      daily: daily,
+      monthly: monthly,
+      agent: agent,
+      ledger: ledger,
+      totalCustomers: customers.length,
+      inactiveCustomers: inactiveCustomers,
+      totalLoanAmount: totalLoanAmount,
+      interestEarned: totalInterest,
+      recentCollections:
+          recentCollections.map(CollectionEntry.fromJson).toList(),
+      recentLoans: recentLoans.map(NewLoanEntry.fromJson).toList(),
+    );
+  }
+
+  Future<void> _refresh() async {
+    setState(() {
+      _future = _load();
+    });
+    await _future;
+  }
+
+  void _quickAction(BuildContext context, String label) {
+    final l10n = AppLocalizations.of(context);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(l10n.dashboardNotLinkedYet(label))),
+    );
+  }
+
+  Widget _buildNetBalanceCard(AccountLedgerSummary s, AppLocalizations l10n) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    const fmt = formatIndianCurrency;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+              colors: [
+                scheme.primary.withValues(alpha: 0.92),
+                AppColors.kGoldDark.withValues(alpha: 0.92)
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          borderRadius: BorderRadius.circular(24),
+          border:
+              Border.all(color: AppColors.kGold.withOpacity(0.35), width: 1.2),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.savings_outlined,
+                    color: AppColors.kGoldLight, size: 20),
+                const SizedBox(width: 8),
+                Text(l10n.dashboardNetBalanceSummary,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold)),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(l10n.dashboardNetBalanceSubtitle,
+                style: const TextStyle(
+                    color: AppColors.kTextOnDarkMuted, fontSize: 12)),
+            const SizedBox(height: 16),
+            _ledgerRow(
+              icon: Icons.account_balance_wallet_outlined,
+              iconColor: AppColors.gold50,
+              label: l10n.dashboardCashInHand,
+              value: fmt(s.cashInHand),
+              valueColor: AppColors.gold50,
+              details: {
+                l10n.dashboardLoanCollections: fmt(s.loanCollections),
+                l10n.dashboardFundDeposits: fmt(s.fundDeposits),
+                l10n.dashboardCustomCashIn: fmt(s.customCashIn),
+              },
+            ),
+            const SizedBox(height: 14),
+            _ledgerRow(
+              icon: Icons.account_balance_outlined,
+              iconColor: AppColors.gold50,
+              label: l10n.dashboardOutstandingMoneyLent,
+              value: fmt(s.outstandingMoneyLent),
+              valueColor: AppColors.gold50,
+              details: {
+                l10n.dashboardLoansOutstanding: fmt(s.totalLoanOutstanding),
+                l10n.dashboardCustomLent: fmt(s.customLentNet),
+              },
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    AppColors.kGold.withOpacity(0.25),
+                    AppColors.kGoldDark.withOpacity(0.15)
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.kGold.withOpacity(0.5)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.emoji_events_outlined,
+                              color: AppColors.kGoldLight, size: 18),
+                          const SizedBox(width: 6),
+                          Text(l10n.dashboardNetBalanceLabel,
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.25),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(l10n.dashboardTotalAssets,
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(fmt(s.netBalance),
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 26,
+                          fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Text(
+                    l10n.dashboardNetBalanceFormula(
+                        fmt(s.cashInHand), fmt(s.outstandingMoneyLent)),
+                    style: const TextStyle(
+                        color: AppColors.kTextOnDarkMuted, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+
+
+
+  Widget _ledgerRow({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required String value,
+    required Color valueColor,
+    required Map<String, String> details,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: iconColor, size: 16),
+              const SizedBox(width: 6),
+              Text(label,
+                  style: TextStyle(
+                      color: iconColor,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.4)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(value,
+              style: TextStyle(
+                  color: valueColor,
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold)),
+          const Divider(color: Colors.white24, height: 18),
+          ...details.entries.map((e) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(e.key,
+                          style: const TextStyle(
+                              color: AppColors.kTextOnDarkMuted, fontSize: 12),
+                          overflow: TextOverflow.ellipsis),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(e.value,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              )),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final AppUser user = SessionService.instance.currentUser!;
+    final theme = Theme.of(context);
+    final todayLabel = DateFormat('EEEE, d MMMM y').format(DateTime.now());
+    final firstName = user.name.split(' ').first;
+    final greeting = _greetingForHour(_now.hour, l10n);
+
+    return AppShell(
+      currentRoute: AppRoutes.dashboard,
+      title: l10n.dashboardTitle,
+      body: FutureBuilder<_DashboardData>(
+        future: _future,
+        builder: (context, snapshot) {
+          final data = snapshot.data;
+          final loading = snapshot.connectionState != ConnectionState.done;
+          final error = snapshot.hasError ? snapshot.error.toString() : null;
+
+          return Stack(
+            children: [
+              Positioned.fill(
+                  child: Container(color: theme.scaffoldBackgroundColor)),
+              Positioned(
+                  top: -60,
+                  left: -40,
+                  child: _blurOrb(220, AppColors.kGold.withOpacity(0.35))),
+              Positioned(
+                  top: 220,
+                  right: -60,
+                  child: _blurOrb(200, AppColors.kInfo.withOpacity(0.28))),
+              Positioned(
+                  bottom: 100,
+                  left: -50,
+                  child: _blurOrb(240, AppColors.kSuccess.withOpacity(0.22))),
+              Positioned(
+                  bottom: -40,
+                  right: -30,
+                  child:
+                      _blurOrb(180, const Color(0xFF7C3AED).withOpacity(0.22))),
+              RefreshIndicator(
+                onRefresh: _refresh,
+                child: ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    _buildHeroBanner(
+                        context, todayLabel, firstName, greeting, data, l10n),
+                    const SizedBox(height: 16),
+                    if (loading)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 64),
+                        child: Center(child: CircularProgressIndicator()),
+                      )
+                    else if (error != null)
+                      _errorCard(error)
+                    else if (data != null) ...[
+                     
+                      _buildStatGrid(data, l10n),
+                      const SizedBox(height: 16),
+                       _buildNetBalanceCard(data.ledger, l10n),
+                      const SizedBox(height: 16),
+                      _buildCollectionTrendCard(
+                          data.monthly.collectionTrend, l10n),
+                      const SizedBox(height: 16),
+                      _buildLoanStatusCard(data.monthly, l10n),
+                      const SizedBox(height: 16),
+                      _buildAgentPerformanceCard(data.agent, l10n),
+                      const SizedBox(height: 16),
+                      _buildMonthlyProgressCard(data.monthly, l10n),
+                      const SizedBox(height: 16),
+                      _buildQuickActionsCard(context, l10n),
+                      const SizedBox(height: 16),
+                      _buildRecentCollectionsCard(
+                          context, data.recentCollections, l10n),
+                      const SizedBox(height: 16),
+                      _buildRecentLoansCard(
+                          context, data.recentLoans, l10n),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  String _greetingForHour(int hour, AppLocalizations l10n) {
+    if (hour < 12) return l10n.dashboardGreetingMorning;
+    if (hour < 17) return l10n.dashboardGreetingAfternoon;
+    return l10n.dashboardGreetingEvening;
+  }
+
+  Widget _errorCard(String message) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.kDanger.withOpacity(0.25)),
+      ),
+      child: Text(message, style: const TextStyle(color: AppColors.kDanger)),
+    );
+  }
+
+  Widget _blurOrb(double size, Color color) {
+    return IgnorePointer(
+      child: ClipRRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 0, sigmaY: 0),
+          child: Container(
+            width: size,
+            height: size,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(colors: [color, color.withOpacity(0.0)]),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _glassCard({
+    required Widget child,
+    EdgeInsetsGeometry padding = const EdgeInsets.all(16),
+    double radius = 24,
+    double blur = 18,
+    double opacity = 0.55,
+  }) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(radius),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        child: Container(
+          width: double.infinity,
+          padding: padding,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(opacity),
+            borderRadius: BorderRadius.circular(radius),
+            border:
+                Border.all(color: Colors.white.withOpacity(0.65), width: 1.2),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionHeader(String title, String subtitle, {Widget? trailing}) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title,
+                  style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.kTextDark)),
+              const SizedBox(height: 2),
+              Text(subtitle,
+                  style: const TextStyle(
+                      fontSize: 12, color: AppColors.kTextMuted)),
+            ],
+          ),
+        ),
+        if (trailing != null) trailing,
+      ],
+    );
+  }
+
+  Widget _buildHeroBanner(BuildContext context, String today, String firstName,
+      String greeting, _DashboardData? data, AppLocalizations l10n) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final collections = data?.daily.summary.totalCollected ?? 0;
+    final loans = data?.monthly.summary.activeLoans ?? 0;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(26),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                scheme.primary.withValues(alpha: 0.92),
+                AppColors.kGoldDark.withValues(alpha: 0.92)
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(26),
+            border: Border.all(
+                color: Colors.white.withValues(alpha: 0.35), width: 1.2),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(today.toUpperCase(),
+                  style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Text(l10n.dashboardGreetingWithName(greeting, firstName),
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Text(
+                l10n.dashboardLiveFigures(
+                    formatIndianCurrency(collections), loans),
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 13, height: 1.4),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatGrid(_DashboardData data, AppLocalizations l10n) {
+    final daily = data.daily;
+    final monthly = data.monthly;
+    final overdueLoans = monthly.summary.overdueLoans;
+    // Every loan still running — on time or overdue — as the web dashboard
+    // counts it (e.g. 36 active + 9 overdue = 45).
+    final activeLoans = monthly.summary.activeLoans + overdueLoans;
+
+    return ResponsiveStatGrid(
+      children: [
+        StatCard(
+          label: l10n.dashboardStatActiveLoans,
+          value: '$activeLoans',
+          icon: Icons.account_balance_outlined,
+          iconColor: Colors.blue,
+          iconBackground: const Color(0xFFDCEAFE),
+        ),
+        StatCard(
+          label: l10n.customersStatTotal,
+          value: '${data.totalCustomers}',
+          icon: Icons.people_outline,
+          iconColor: Colors.blue,
+          iconBackground: const Color(0xFFDCEAFE),
+        ),
+        StatCard(
+          label: l10n.dashboardStatTodaysCollections,
+          value: formatIndianCurrency(daily.summary.totalCollected),
+          icon: Icons.currency_rupee,
+          iconColor: Colors.green,
+          iconBackground: const Color(0xFFDCFCE7),
+        ),
+        StatCard(
+          label: l10n.dashboardStatOverdueAccounts,
+          value: '$overdueLoans',
+          icon: Icons.warning_amber_rounded,
+          iconColor: Colors.red,
+          iconBackground: const Color(0xFFFEE2E2),
+        ),
+        StatCard(
+          label: l10n.customersStatInactive,
+          value: '${data.inactiveCustomers}',
+          icon: Icons.how_to_reg_outlined,
+          iconColor: Colors.orange,
+          iconBackground: const Color(0xFFFEF3C7),
+        ),
+        StatCard(
+          label: l10n.dashboardStatTotalLoanAmount,
+          value: formatIndianCurrency(data.totalLoanAmount),
+          icon: Icons.credit_card_outlined,
+          iconColor: const Color(0xFF7C3AED),
+          iconBackground: const Color(0xFFEDE9FE),
+        ),
+        StatCard(
+          label: l10n.dashboardStatInterestRevenue,
+          value: formatIndianCurrency(data.interestEarned),
+          icon: Icons.trending_up_rounded,
+          iconColor: Colors.green,
+          iconBackground: const Color(0xFFDCFCE7),
+        ),
+        StatCard(
+          label: l10n.dashboardStatMonthlyCollection,
+          value: formatIndianCurrency(monthly.summary.collected),
+          icon: Icons.calendar_month_outlined,
+          iconColor: Colors.blue,
+          iconBackground: const Color(0xFFDCEAFE),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCollectionTrendCard(List<MonthPoint> trend, AppLocalizations l10n) {
+    final values = trend.map((e) => e.value).toList();
+    return _glassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionHeader(l10n.dashboardCollectionTrend,
+              l10n.dashboardCollectionTrendSubtitle),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 140,
+            width: double.infinity,
+            child: CustomPaint(
+              painter: _LineChartPainter(
+                  values: _normalize(values), color: AppColors.kInfo),
+              size: Size.infinite,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: trend
+                .map((m) => Text(m.label,
+                    style: const TextStyle(
+                        fontSize: 11, color: AppColors.kTextMuted)))
+                .toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLoanStatusCard(MonthlyReport monthly, AppLocalizations l10n) {
+    final active = monthly.summary.activeLoans.toDouble();
+    final overdue = monthly.summary.overdueLoans.toDouble();
+    final closed =
+        (monthly.summary.collectionCount - overdue).clamp(0, 999999).toDouble();
+    final slices = [
+      _DonutSlice(l10n.dashboardStatusActive, active, AppColors.kSuccess),
+      _DonutSlice(l10n.dashboardStatusOverdue, overdue, AppColors.kDanger),
+      _DonutSlice(
+          l10n.dashboardStatusClosedOther, closed, AppColors.kTextMuted),
+    ];
+    final total = slices.fold<double>(0, (sum, s) => sum + s.value);
+    return _glassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionHeader(
+              l10n.dashboardLoanStatus, l10n.dashboardLoanStatusSubtitle),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              SizedBox(
+                width: 120,
+                height: 120,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    CustomPaint(
+                      painter: _DonutChartPainter(slices: slices),
+                      size: const Size(120, 120),
+                    ),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('${total.toInt()}',
+                            style: const TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.kTextDark)),
+                        Text(l10n.dashboardDonutTotal,
+                            style: const TextStyle(
+                                fontSize: 11, color: AppColors.kTextMuted)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 20),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: slices
+                      .map((s) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              children: [
+                                Container(
+                                    width: 10,
+                                    height: 10,
+                                    decoration: BoxDecoration(
+                                        color: s.color,
+                                        shape: BoxShape.circle)),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                    child: Text(s.label,
+                                        style: const TextStyle(
+                                            fontSize: 13,
+                                            color: AppColors.kTextDark))),
+                                Text('${s.value.toInt()}',
+                                    style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.kTextDark)),
+                              ],
+                            ),
+                          ))
+                      .toList(),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAgentPerformanceCard(
+      AgentReport agentReport, AppLocalizations l10n) {
+    // The report gives each agent's collected rupees. Bars are sized against
+    // the top collector and labelled with the amount itself.
+    final maxCollected = agentReport.chart
+        .fold<double>(0, (m, e) => e.value > m ? e.value : m);
+    final data = agentReport.chart
+        .map((e) => _BarDatum(
+              e.label,
+              maxCollected <= 0 ? 0 : _scaleValue(e.value) / maxCollected,
+              color: AppColors.kInfo,
+              valueLabel: formatIndianCurrency(e.value),
+            ))
+        .toList();
+    return _glassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _sectionHeader(l10n.dashboardAgentPerformance,
+              l10n.dashboardAgentPerformanceSubtitle),
+          const SizedBox(height: 20),
+          SizedBox(
+              height: 200,
+              child: _buildBarChart(data, defaultColor: AppColors.kInfo)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBarChart(List<_BarDatum> data, {required Color defaultColor}) {
+    const double chartHeight = 120;
+    return SizedBox(
+      height: chartHeight + 36,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: data.map((d) {
+          final barColor = d.color ?? defaultColor;
+          final barHeight = (d.value.clamp(0.0, 1.0)) * chartHeight;
+          return Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(d.valueLabel ?? '${(d.value * 100).round()}%',
+                        maxLines: 1,
+                        style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: barColor)),
+                  ),
+                  const SizedBox(height: 6),
+                  SizedBox(
+                    height: chartHeight,
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: ClipRRect(
+                        borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(6)),
+                        child: Container(
+                          height: barHeight < 4 && d.value > 0 ? 4 : barHeight,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                barColor.withOpacity(d.value == 0 ? 0.3 : 0.85),
+                                barColor.withOpacity(d.value == 0 ? 0.15 : 0.55)
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(d.label,
+                      style: const TextStyle(
+                          fontSize: 12, color: AppColors.kTextMuted)),
+                ],
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildMonthlyProgressCard(MonthlyReport monthly, AppLocalizations l10n) {
+    final target =
+        monthly.summary.disbursement <= 0 ? 1.0 : monthly.summary.disbursement;
+    final progress = (monthly.summary.collected / target).clamp(0.0, 1.0);
+    final percentLabel = (progress * 100).toStringAsFixed(1);
+    final fmt = NumberFormat.decimalPattern('en_IN');
+    return _glassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionHeader(
+              l10n.dashboardMonthlyProgress,
+              l10n.dashboardMonthlyProgressSubtitle(
+                  fmt.format(monthly.summary.collected), fmt.format(target)),
+              trailing: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: AppColors.kSuccess.withOpacity(0.16),
+                  borderRadius: BorderRadius.circular(20),
+                  border:
+                      Border.all(color: AppColors.kSuccess.withOpacity(0.3)),
+                ),
+                child: Text('$percentLabel%',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.kSuccess)),
+              )),
+          const SizedBox(height: 16),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 10,
+              backgroundColor: Colors.white.withOpacity(0.4),
+              valueColor: const AlwaysStoppedAnimation(AppColors.kInfo),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickActionsCard(BuildContext context, AppLocalizations l10n) {
+    final actions = <_QuickAction>[
+      _QuickAction(
+          l10n.dashboardQuickAddCustomer,
+          Icons.person_add_alt_outlined,
+          AppColors.kInfo,
+          () => Navigator.of(context).pushNamed(AppRoutes.customers)),
+      _QuickAction(
+          l10n.dashboardQuickCreateLoan,
+          Icons.account_balance_outlined,
+          AppColors.kSuccess,
+          () => Navigator.of(context).pushNamed(AppRoutes.loans)),
+      _QuickAction(l10n.dashboardQuickChitGroup, Icons.groups_outlined,
+          const Color(0xFF7C3AED),
+          () => Navigator.of(context).pushNamed(AppRoutes.chitGroups)),
+      _QuickAction(l10n.dashboardQuickAddAgent, Icons.badge_outlined,
+          AppColors.kWarning,
+          () => Navigator.of(context).pushNamed(AppRoutes.agent)),
+      _QuickAction(l10n.dashboardQuickReports, Icons.description_outlined,
+          AppColors.kInfo,
+          () => Navigator.of(context).pushNamed(AppRoutes.reports)),
+    ];
+    return _glassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(l10n.dashboardQuickActions,
+              style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.kTextDark)),
+          const SizedBox(height: 16),
+          GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 12,
+            childAspectRatio: 1.8,
+            children:
+                actions.map((a) => _QuickActionButton(action: a)).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRecentCollectionsCard(
+      BuildContext context, List<CollectionEntry> items, AppLocalizations l10n) {
+    return _glassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionHeader(
+            l10n.dashboardRecentCollections,
+            l10n.dashboardRecentCollectionsSubtitle,
+            trailing: TextButton(
+                onPressed: () =>
+                    Navigator.of(context).pushNamed(AppRoutes.collections),
+                child: Text(l10n.dashboardViewAll)),
+          ),
+          Divider(height: 20, color: Colors.white.withOpacity(0.6)),
+          if (items.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Text(l10n.dashboardNoCollectionsToday,
+                  style: const TextStyle(color: AppColors.kTextMuted)),
+            )
+          else
+            ...items.take(5).map((item) => _glassListRow(
+                  icon: Icons.call_received_rounded,
+                  iconColor: AppColors.kSuccess,
+                  iconBg: const Color(0xFFDCFCE7),
+                  title: item.customerName,
+                  subtitle: '${item.loanNumber} • ${item.paymentMethod}',
+                  trailingTop: formatIndianCurrency(item.collectionAmount),
+                  trailingBottom: _prettyDate(item.collectionDate.isNotEmpty
+                      ? item.collectionDate
+                      : item.createdAt),
+                )),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRecentLoansCard(
+      BuildContext context, List<NewLoanEntry> items, AppLocalizations l10n) {
+    return _glassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionHeader(
+            l10n.dashboardRecentLoans,
+            l10n.dashboardRecentLoansSubtitle,
+            trailing: TextButton(
+                onPressed: () =>
+                    Navigator.of(context).pushNamed(AppRoutes.loans),
+                child: Text(l10n.dashboardViewAll)),
+          ),
+          Divider(height: 20, color: Colors.white.withOpacity(0.6)),
+          if (items.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Text(l10n.dashboardNoLoansToday,
+                  style: const TextStyle(color: AppColors.kTextMuted)),
+            )
+          else
+            ...items.take(5).map((item) {
+              final statusColor = switch (item.status.toLowerCase()) {
+                'active' => AppColors.kSuccess,
+                'overdue' => AppColors.kDanger,
+                _ => AppColors.kTextMuted,
+              };
+              return _glassListRow(
+                icon: Icons.account_balance_outlined,
+                iconColor: AppColors.kInfo,
+                iconBg: const Color(0xFFDCEAFE),
+                title: item.customerName,
+                subtitle: '${item.loanNumber} • ${item.loanType}',
+                trailingTop: formatIndianCurrency(item.loanAmount),
+                trailingBottom: item.status,
+                trailingBottomColor: statusColor,
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
+  Widget _glassListRow({
+    required IconData icon,
+    required Color iconColor,
+    required Color iconBg,
+    required String title,
+    required String subtitle,
+    required String trailingTop,
+    required String trailingBottom,
+    Color? trailingBottomColor,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.35),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withOpacity(0.5)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                        color: iconBg, borderRadius: BorderRadius.circular(10)),
+                    child: Icon(icon, color: iconColor, size: 18)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.kTextDark),
+                          overflow: TextOverflow.ellipsis),
+                      Text(subtitle,
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.kTextMuted),
+                          overflow: TextOverflow.ellipsis),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(trailingTop,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.kTextDark)),
+                    Text(trailingBottom,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: trailingBottomColor != null
+                              ? FontWeight.w600
+                              : FontWeight.normal,
+                          color: trailingBottomColor ?? AppColors.kTextMuted,
+                        )),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<double> _normalize(List<double> values) {
+    if (values.isEmpty) return const [];
+    final maxValue =
+        values.fold<double>(0, (max, value) => value > max ? value : max);
+    if (maxValue <= 0) return List<double>.filled(values.length, 0);
+    return values.map((v) => v / maxValue).toList();
+  }
+
+  static double _round2(double n) => (n * 100).roundToDouble() / 100;
+
+  static double _num(dynamic v) => double.tryParse(v?.toString() ?? '') ?? 0;
+
+  /// Interest one loan has earned so far (mirrors the web dashboard):
+  /// - pending loans have earned nothing yet;
+  /// - weekly loans, and daily loans of 100+ days, take the interest
+  ///   upfront, so all of it is earned at disbursement;
+  /// - every other loan earns it in proportion to what has been repaid.
+  static double _interestEarned(Map<String, dynamic> loan) {
+    if ((loan['status'] ?? '').toString() == 'pending') return 0;
+    final interest = _num(loan['total_interest']);
+    if (interest <= 0) return 0;
+
+    final type = (loan['loan_type'] ?? '').toString().toLowerCase();
+    final days = _num(loan['loan_duration']);
+    final upfront =
+        type == 'weekly' || (type == 'daily' && (days > 0 ? days : 60) >= 100);
+    if (upfront) return _round2(interest);
+
+    final repayment = _num(loan['total_repayment']);
+    if (repayment <= 0) return 0;
+    final repaid = math.max(0.0, repayment - _num(loan['outstanding_balance']));
+    return _round2(math.min(interest, interest * (repaid / repayment)));
+  }
+
+  double _scaleValue(double value) {
+    if (value <= 0) return 0;
+    return value;
+  }
+
+  String _prettyDate(String value) {
+    final parsed = DateTime.tryParse(value);
+    if (parsed == null) return value;
+    return DateFormat('dd MMM yyyy').format(parsed);
+  }
+}
+
+class _DashboardData {
+  _DashboardData({
+    required this.daily,
+    required this.monthly,
+    required this.agent,
+    required this.ledger,
+    required this.totalCustomers,
+    required this.inactiveCustomers,
+    required this.totalLoanAmount,
+    required this.interestEarned,
+    required this.recentCollections,
+    required this.recentLoans,
+  });
+
+  final DailyReport daily;
+  final MonthlyReport monthly;
+  final AgentReport agent;
+  final AccountLedgerSummary ledger;
+  final int totalCustomers;
+  final int inactiveCustomers;
+  final double totalLoanAmount;
+  final double interestEarned;
+  final List<CollectionEntry> recentCollections;
+  final List<NewLoanEntry> recentLoans;
+}
+
+class _DonutSlice {
+  final String label;
+  final double value;
+  final Color color;
+  const _DonutSlice(this.label, this.value, this.color);
+}
+
+class _BarDatum {
+  final String label;
+  final double value; // bar height, 0..1
+  final Color? color;
+  final String? valueLabel; // shown above the bar; defaults to value as %
+  const _BarDatum(this.label, this.value, {this.color, this.valueLabel});
+}
+
+class _QuickAction {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+  _QuickAction(this.label, this.icon, this.color, this.onTap);
+}
+
+class _QuickActionButton extends StatelessWidget {
+  final _QuickAction action;
+  const _QuickActionButton({required this.action});
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        child: InkWell(
+          onTap: action.onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.4),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white.withOpacity(0.55)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                      color: action.color.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(10)),
+                  child: Icon(action.icon, color: action.color, size: 18),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    action.label,
+                    style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.kTextDark),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LineChartPainter extends CustomPainter {
+  final List<double> values;
+  final Color color;
+
+  _LineChartPainter({required this.values, required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.isEmpty) return;
+    final dx = values.length > 1 ? size.width / (values.length - 1) : 0.0;
+    final points = <Offset>[
+      for (int i = 0; i < values.length; i++)
+        Offset(dx * i, size.height - (values[i].clamp(0.0, 1.0) * size.height)),
+    ];
+    final linePath = Path()..moveTo(points.first.dx, points.first.dy);
+    for (int i = 0; i < points.length - 1; i++) {
+      final p0 = points[i];
+      final p1 = points[i + 1];
+      final mid = Offset((p0.dx + p1.dx) / 2, (p0.dy + p1.dy) / 2);
+      linePath.quadraticBezierTo(p0.dx, p0.dy, mid.dx, mid.dy);
+    }
+    linePath.lineTo(points.last.dx, points.last.dy);
+    final fillPath = Path.from(linePath)
+      ..lineTo(points.last.dx, size.height)
+      ..lineTo(points.first.dx, size.height)
+      ..close();
+    final fillPaint = Paint()
+      ..shader = LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [color.withOpacity(0.28), color.withOpacity(0.0)])
+          .createShader(Rect.fromLTWH(0, 0, size.width, size.height));
+    canvas.drawPath(fillPath, fillPaint);
+    final linePaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round;
+    canvas.drawPath(linePath, linePaint);
+    final dotPaint = Paint()..color = color;
+    for (final p in points) {
+      canvas.drawCircle(p, 3, dotPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _LineChartPainter oldDelegate) =>
+      oldDelegate.values != values || oldDelegate.color != color;
+}
+
+class _DonutChartPainter extends CustomPainter {
+  final List<_DonutSlice> slices;
+  _DonutChartPainter({required this.slices});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final total = slices.fold<double>(0, (s, e) => s + e.value);
+    if (total <= 0) return;
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = math.min(size.width, size.height) / 2 - 8;
+    final rect = Rect.fromCircle(center: center, radius: radius);
+    double start = -math.pi / 2;
+    for (final slice in slices) {
+      if (slice.value <= 0) continue;
+      final sweep = (slice.value / total) * math.pi * 2;
+      final paint = Paint()
+        ..color = slice.color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 18
+        ..strokeCap = StrokeCap.round;
+      canvas.drawArc(rect, start, sweep, false, paint);
+      start += sweep;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DonutChartPainter oldDelegate) =>
+      oldDelegate.slices != slices;
+}

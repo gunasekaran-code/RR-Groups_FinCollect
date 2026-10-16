@@ -1,0 +1,215 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../config/api_config.dart';
+import '../models/AppNotification.dart';
+import '../models/user_role.dart';
+import 'method_override_http.dart';
+import 'session_service.dart';
+
+class NotificationApiException implements Exception {
+  final String message;
+  final int? statusCode;
+  NotificationApiException(this.message, [this.statusCode]);
+  @override
+  String toString() => message;
+}
+
+class NotificationService {
+  static final http.Client _client = http.Client();
+
+  static String get _restEndpoint => '${ApiConfig.normalizedBaseUrl}/rest.php';
+  static final Uri _notifCreateUri = Uri.parse(_restEndpoint)
+      .replace(queryParameters: {'table': 'notifications'});
+
+  static String? currentUserNotificationId() {
+    final user = SessionService.instance.currentUser;
+    if (user == null) return null;
+
+    // Notifications are stored against the authenticated profile id. This
+    // also matches reminders and broadcasts created by the backend.
+    final userId = user.userId.trim();
+    if (userId.isNotEmpty) return userId;
+
+    // Kept as a fallback for older sessions that did not persist profile id.
+    final customerId = (user.customerId ?? '').trim();
+    if (customerId.isNotEmpty) return customerId;
+
+    return null;
+  }
+
+  static Map<String, String> get _headers {
+    final token = SessionService.instance.token;
+    return {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+  }
+
+  static dynamic _decodeBody(http.Response res) {
+    if (res.body.isEmpty) return {};
+    try {
+      return jsonDecode(res.body);
+    } catch (_) {
+      throw NotificationApiException('Invalid server response', res.statusCode);
+    }
+  }
+
+  static List<dynamic> _decodeList(http.Response res) {
+    final data = _decodeBody(res);
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      final msg = data is Map<String, dynamic>
+          ? (data['message']?.toString() ??
+              data['error']?.toString() ??
+              'Request failed')
+          : 'Request failed (${res.statusCode})';
+      throw NotificationApiException(msg, res.statusCode);
+    }
+    if (data is List) return data;
+    if (data is Map<String, dynamic>) {
+      final nested = data['data'];
+      if (nested is List) return nested;
+    }
+    return [];
+  }
+
+  /// Fetch notifications for the currently logged-in account only.
+  static Future<List<AppNotification>> fetchForCurrentUser() async {
+    final currentUserId = currentUserNotificationId();
+    if (currentUserId == null) return [];
+
+    final uri = Uri.parse(
+      '$_restEndpoint?table=notifications&user_id=eq.$currentUserId&order=created_at.desc',
+    );
+
+    final res = await _client.get(uri, headers: _headers);
+    final list = _decodeList(res);
+    return list
+        .map((e) => AppNotification.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  static Future<void> markRead(String id) async {
+    final res = await postWithMethodOverride(
+      Uri.parse('$_restEndpoint?table=notifications&id=eq.$id'),
+      method: 'PATCH',
+      headers: _headers,
+      body: jsonEncode({'read': 1}),
+    );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw NotificationApiException('Failed to mark as read', res.statusCode);
+    }
+  }
+
+  static Future<void> markAllRead(List<String> ids) async {
+    for (final id in ids) {
+      await markRead(id);
+    }
+  }
+
+  static Future<void> delete(String id) async {
+    final res = await postWithMethodOverride(
+      Uri.parse('$_restEndpoint?table=notifications&id=eq.$id'),
+      method: 'DELETE',
+      headers: _headers,
+    );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw NotificationApiException(
+          'Failed to delete notification', res.statusCode);
+    }
+  }
+
+  /// Send a notification to one or more user_ids
+  static Future<void> send({
+    required List<String> userIds,
+    required String type,
+    required String title,
+    required String message,
+  }) async {
+    final uniqueUserIds = userIds.toSet().where((id) => id.isNotEmpty).toList();
+    if (uniqueUserIds.isEmpty) return;
+
+    // The REST endpoint accepts an array for bulk inserts. One request is much
+    // faster and more reliable than a separate request for every customer.
+    final res = await _client.post(
+      _notifCreateUri,
+      headers: _headers,
+      body: jsonEncode([
+        for (final userId in uniqueUserIds)
+          {
+            'user_id': userId,
+            'title': title,
+            'message': message,
+            'type': type,
+            'read': 0,
+          },
+      ]),
+    );
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      final data = _decodeBody(res);
+      final message = data is Map<String, dynamic>
+          ? (data['error'] ?? data['message'] ?? 'Failed to send notifications')
+              .toString()
+          : 'Failed to send notifications';
+      throw NotificationApiException(message, res.statusCode);
+    }
+  }
+
+  /// user_ids of every admin account — the recipients of support tickets.
+  static Future<List<String>> fetchAdminUserIds() async {
+    final res = await _client.get(
+      Uri.parse('$_restEndpoint?table=profiles&role=eq.admin&select=id'),
+      headers: _headers,
+    );
+    final list = _decodeList(res);
+    return list
+        .map((e) => (e as Map<String, dynamic>)['id']?.toString() ?? '')
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+  }
+
+  /// Deliver a Contact Support form submission to every admin's feed.
+  /// The sender (customer or agent) is named in the body so the admin knows
+  /// who to reply to without opening another screen.
+  static Future<void> sendSupportRequest({
+    required String category,
+    required String subject,
+    required String message,
+  }) async {
+    final adminIds = await fetchAdminUserIds();
+    if (adminIds.isEmpty) {
+      throw NotificationApiException(
+          'No admin account is available to receive this message');
+    }
+
+    final user = SessionService.instance.currentUser;
+    final senderName = (user?.name ?? '').trim();
+    final senderRole = user?.role.label ?? 'User';
+    final sender = senderName.isEmpty ? senderRole : '$senderName ($senderRole)';
+
+    // title is VARCHAR(191) in the notifications table.
+    var title = 'Support: $subject';
+    if (title.length > 191) title = '${title.substring(0, 188)}...';
+
+    await send(
+      userIds: adminIds,
+      type: 'info',
+      title: title,
+      message: 'From: $sender\nCategory: $category\n\n$message',
+    );
+  }
+
+  /// Returns just the count of unread notifications for a user.
+  static Future<int> fetchUnreadCount({String? userId}) async {
+    final effectiveUserId = userId ?? currentUserNotificationId();
+    final uri = effectiveUserId == null
+        ? Uri.parse('$_restEndpoint?table=notifications&read=eq.0')
+        : Uri.parse(
+            '$_restEndpoint?table=notifications&user_id=eq.$effectiveUserId&read=eq.0');
+
+    final res = await _client.get(uri, headers: _headers);
+    final list = _decodeList(res);
+    return list.length;
+  }
+}
